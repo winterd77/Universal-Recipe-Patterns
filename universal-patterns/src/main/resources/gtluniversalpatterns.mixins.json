@@ -1,0 +1,24 @@
+{
+  "required": true,
+  "minVersion": "0.8",
+  "package": "org.gtlcore.universalpatterns.mixin",
+  "compatibilityLevel": "JAVA_17",
+  "mixins": [
+    "RecipeBufferFactoryMixin",
+    "UniversalPatternRecognitionMixin",
+    "UniversalPatternProviderMixin",
+    "UniversalWildcardBufferMixin",
+    "UniversalWildcardRuntimeMixin",
+    "UniversalRecipeBindingMixin",
+    "UniversalWildcardCompatInvoker",
+    "UniversalTerminalSlotMixin",
+    "UniversalTerminalEncodeMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  },
+  "client": [
+    "ExternalCatalystEncodingMixin",
+    "ExternalCatalystHintMixin"
+  ]
+}

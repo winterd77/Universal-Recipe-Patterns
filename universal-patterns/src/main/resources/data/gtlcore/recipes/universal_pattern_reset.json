@@ -1,0 +1,5 @@
+{
+ "type":"minecraft:crafting_shapeless",
+ "ingredients":[{"item":"gtlcore:universal_pattern"}],
+ "result":{"item":"gtlcore:universal_pattern","count":1}
+}

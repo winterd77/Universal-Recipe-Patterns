@@ -1,0 +1,32 @@
+modLoader="javafml"
+loaderVersion="[47,)"
+license="LGPL-3.0; includes GPL-3.0 derived portions (see META-INF/licenses)"
+[[mods]]
+modId="gtluniversalpatterns"
+version="1.0.31"
+displayName="GTL Universal Patterns"
+description="Portable universal recipe patterns with persistent per-item drafts."
+[[dependencies.gtluniversalpatterns]]
+modId="gtlcore"
+mandatory=true
+versionRange="[1.2.3.3-fix4]"
+ordering="AFTER"
+side="BOTH"
+[[dependencies.gtluniversalpatterns]]
+modId="gtceu"
+mandatory=true
+versionRange="[1.4.4]"
+ordering="AFTER"
+side="BOTH"
+[[dependencies.gtluniversalpatterns]]
+modId="ae2"
+mandatory=true
+versionRange="[15,)"
+ordering="AFTER"
+side="BOTH"
+[[dependencies.gtluniversalpatterns]]
+modId="minecraft"
+mandatory=true
+versionRange="[1.20.1,1.20.2)"
+ordering="NONE"
+side="BOTH"

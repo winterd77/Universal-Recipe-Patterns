@@ -1,0 +1,8 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "gtceu:rubber", "required": false },
+    { "id": "gtceu:silicone_rubber", "required": false },
+    { "id": "gtceu:styrene_butadiene_rubber", "required": false }
+  ]
+}

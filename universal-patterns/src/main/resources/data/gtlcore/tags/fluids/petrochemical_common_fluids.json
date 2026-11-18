@@ -1,0 +1,15 @@
+{
+  "replace": false,
+  "values": [
+    "minecraft:water",
+    "minecraft:flowing_water",
+    { "id": "gtceu:steam", "required": false },
+    { "id": "gtceu:distilled_water", "required": false },
+    { "id": "gtceu:hydrogen", "required": false },
+    { "id": "gtceu:oxygen", "required": false },
+    { "id": "gtceu:nitrogen", "required": false },
+    { "id": "gtceu:helium", "required": false },
+    { "id": "gtceu:carbon_dioxide", "required": false },
+    { "id": "gtceu:hydrogen_sulfide", "required": false }
+  ]
+}

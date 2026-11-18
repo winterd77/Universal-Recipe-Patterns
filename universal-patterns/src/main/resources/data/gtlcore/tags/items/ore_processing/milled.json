@@ -1,0 +1,53 @@
+{
+  "replace": false,
+  "values": [
+    {
+      "id": "gtceu:milled_almandine",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_chalcopyrite",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_enriched_naquadah",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_grossular",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_monazite",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_nickel",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_pentlandite",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_platinum",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_pyrope",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_redstone",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_spessartine",
+      "required": false
+    },
+    {
+      "id": "gtceu:milled_sphalerite",
+      "required": false
+    }
+  ]
+}

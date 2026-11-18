@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "kubejs:neutronium_sphere", "required": false },
+    { "id": "kubejs:triplet_neutronium_sphere", "required": false }
+  ]
+}

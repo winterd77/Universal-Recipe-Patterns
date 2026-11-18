@@ -1,0 +1,14 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "kubejs:actinium_superhydride_plasma_containment_cell", "required": false },
+    { "id": "kubejs:rhenium_plasma_containment_cell", "required": false },
+    { "id": "kubejs:draconiumawakened_plasma_containment_cell", "required": false },
+    { "id": "kubejs:neutron_plasma_containment_cell", "required": false },
+    { "id": "kubejs:cosmic_neutron_plasma_cell", "required": false },
+    { "id": "kubejs:crystalmatrix_plasma_containment_cell", "required": false },
+    { "id": "kubejs:dense_neutron_plasma_cell", "required": false },
+    { "id": "kubejs:chaos_containment_unit", "required": false },
+    { "id": "kubejs:cosmic_mesh_containment_unit", "required": false }
+  ]
+}

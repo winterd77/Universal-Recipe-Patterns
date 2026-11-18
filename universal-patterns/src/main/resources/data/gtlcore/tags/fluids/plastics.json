@@ -1,0 +1,17 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "gtceu:epoxy", "required": false },
+    { "id": "gtceu:polybenzimidazole", "required": false },
+    { "id": "gtceu:polycaprolactam", "required": false },
+    { "id": "gtceu:polyetheretherketone", "required": false },
+    { "id": "gtceu:polyethylene", "required": false },
+    { "id": "gtceu:polyimide", "required": false },
+    { "id": "gtceu:polyphenylene_sulfide", "required": false },
+    { "id": "gtceu:polytetrafluoroethylene", "required": false },
+    { "id": "gtceu:polyurethane", "required": false },
+    { "id": "gtceu:polyvinyl_butyral", "required": false },
+    { "id": "gtceu:polyvinyl_chloride", "required": false },
+    { "id": "gtceu:reinforced_epoxy_resin", "required": false }
+  ]
+}

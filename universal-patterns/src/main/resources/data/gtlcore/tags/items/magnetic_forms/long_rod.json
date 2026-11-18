@@ -1,0 +1,7 @@
+{
+  "replace": false,
+  "values": [
+    { "id": "kubejs:long_netherite_rod", "required": false },
+    { "id": "kubejs:magnetic_long_netherite_rod", "required": false }
+  ]
+}
