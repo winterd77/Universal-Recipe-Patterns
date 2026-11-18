@@ -9,7 +9,7 @@ import org.spongepowered.asm.mixin.injection.callback.CallbackInfoReturnable;
 @Mixin(targets={"org.gtlcore.gtlcore.common.machine.multiblock.part.ae.MEPatternBufferRecipeHandlerTraitBase$MEItemInputHandlerBase",
         "org.gtlcore.gtlcore.common.machine.multiblock.part.ae.MEPatternBufferRecipeHandlerTraitBase$MEFluidHandlerBase"}, remap=false)
 public abstract class UniversalRecipeBindingMixin {
-    @Shadow public abstract MEPatternBufferPartMachineBase getMachine();
+    @Shadow(remap=false) public abstract MEPatternBufferPartMachineBase getMachine();
     @Inject(method="meHandleRecipeInner", at=@At("HEAD"), cancellable=true)
     private void universalPatterns$match(GTRecipe recipe, Object2LongMap<?> left, boolean simulate, int slot, CallbackInfoReturnable<Boolean> cir) {
         if (getMachine() instanceof UniversalRecipeBinding binding && !binding.universalPatterns$matchesRecipe(slot, recipe)) cir.setReturnValue(false);

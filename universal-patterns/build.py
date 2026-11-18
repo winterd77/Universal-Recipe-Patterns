@@ -11,7 +11,7 @@ mods = prism / 'instances/GregTech-Leisure-1.4.5.4/minecraft/mods'
 libs = prism / 'libraries'
 base = Path(os.environ.get('GTLCORE_JAR', ROOT / 'build/gtlcore-1.2.3.3-fix4.jar'))
 if not base.is_file():
-    raise SystemExit('Set GTLCORE_JAR to GTLCore 1.2.3.3-fix4 or place it in build/.')
+    raise SystemExit('Set GTLCORE_JAR to GTLCore 1.2.3.3 or 1.2.3.3-fix4, or place the fix4 JAR in build/.')
 mod_jars = [jar for jar in mods.glob('*.jar') if not jar.name.lower().startswith('gtlcore-')]
 jdk = Path('C:/Program Files/Java/jdk-22/bin')
 classes = work / ('classes-' + uuid.uuid4().hex[:8])
@@ -51,7 +51,7 @@ with zipfile.ZipFile(mapped) as z:
     changes = {n:z.read(n) for n in z.namelist() if n.endswith('.class')}
 for p in (module/'src/main/resources').rglob('*'):
     if p.is_file(): changes[p.relative_to(module/'src/main/resources').as_posix()] = p.read_bytes()
-out = Path(os.environ.get('GTL_UNIVERSAL_PATTERNS_OUTPUT', ROOT/'dist/universal-recipe-patterns-1.0.31.jar'))
+out = Path(os.environ.get('GTL_UNIVERSAL_PATTERNS_OUTPUT', ROOT/'dist/universal-recipe-patterns-1.0.32.jar'))
 out.parent.mkdir(parents=True, exist_ok=True)
 staged = work/f'{classes.name}-release.jar'
 locales = json.loads((module/'locales.json').read_text(encoding='utf-8'))

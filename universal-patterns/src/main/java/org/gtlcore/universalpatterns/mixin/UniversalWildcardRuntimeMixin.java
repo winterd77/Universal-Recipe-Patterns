@@ -34,11 +34,11 @@ import net.minecraft.world.entity.player.Player;
         "org.gtlcore.gtlcore.integration.wildcard.MEStockingWildcardPatternBufferPartMachine"}, remap=false)
 public abstract class UniversalWildcardRuntimeMixin extends MEPatternBufferPartMachineBase implements UniversalPatternReload.Target, UniversalRecipeBinding {
     protected UniversalWildcardRuntimeMixin(com.gregtechceu.gtceu.api.machine.IMachineBlockEntity holder, com.gregtechceu.gtceu.api.capability.recipe.IO io) { super(holder, io); }
-    @Shadow @Final private ItemStackTransfer wildcardPatternSlot;
-    @Shadow @Final private List<InternalSlot> internalSlots;
-    @Shadow @Final private List<IPatternDetails> expandedPatterns;
-    @Shadow protected abstract void onWildcardPatternChange();
-    @Shadow private void refundPersistedSlotData(List<CompoundTag> slots) { throw new AssertionError(); }
+    @Shadow(remap=false) @Final private ItemStackTransfer wildcardPatternSlot;
+    @Shadow(remap=false) @Final private List<InternalSlot> internalSlots;
+    @Shadow(remap=false) @Final private List<IPatternDetails> expandedPatterns;
+    @Shadow(remap=false) protected abstract void onWildcardPatternChange();
+    @Shadow(remap=false) private void refundPersistedSlotData(List<CompoundTag> slots) { throw new AssertionError(); }
     @Unique private ListTag universalPatterns$pending = new ListTag();
     @Unique private WildcardPatternEditor universalPatterns$editor;
     @Unique private Map<AEKey, AEItemKey> universalPatterns$supplies = Map.of();

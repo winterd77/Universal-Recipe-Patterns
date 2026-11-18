@@ -3,13 +3,13 @@ loaderVersion="[47,)"
 license="LGPL-3.0; includes GPL-3.0 derived portions (see META-INF/licenses)"
 [[mods]]
 modId="gtluniversalpatterns"
-version="1.0.31"
+version="1.0.32"
 displayName="Universal Recipe Patterns"
 description="Portable universal recipe patterns with persistent per-item drafts."
 [[dependencies.gtluniversalpatterns]]
 modId="gtlcore"
 mandatory=true
-versionRange="[1.2.3.3-fix4]"
+versionRange="[1.2.3.3],[1.2.3.3-fix4]"
 ordering="AFTER"
 side="BOTH"
 [[dependencies.gtluniversalpatterns]]
