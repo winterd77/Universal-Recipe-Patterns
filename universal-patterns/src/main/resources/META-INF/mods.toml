@@ -4,7 +4,7 @@ license="LGPL-3.0; includes GPL-3.0 derived portions (see META-INF/licenses)"
 [[mods]]
 modId="gtluniversalpatterns"
 version="1.0.31"
-displayName="GTL Universal Patterns"
+displayName="Universal Recipe Patterns"
 description="Portable universal recipe patterns with persistent per-item drafts."
 [[dependencies.gtluniversalpatterns]]
 modId="gtlcore"

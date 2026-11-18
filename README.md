@@ -1,6 +1,6 @@
-# GTL Universal Patterns · 通用样板
+# Universal Recipe Patterns · 通用样板
 
-为 Minecraft 整合包 GregTech Leisure 提供可复用的 AE2 加工样板。一张卡可以按配方类型、材料和筛选规则收录多条已注册的配方，并保留每张卡的编辑草稿。
+为 AE2 提供可复用的加工样板，目前支持 Minecraft 整合包 GregTech Leisure。一张卡可以按配方类型、材料和筛选规则收录多条已注册的配方，并保留每张卡的编辑草稿。
 
 - 手持样板对空气右键打开编辑器。点击「应用」后，已配置的配方才会参与自动合成。
 - 支持 AE2 普通样板供应器、ExtendedAE 扩展样板供应器，以及兼容的 GTL 通配符和配方样板总成。
@@ -17,11 +17,11 @@
 | Applied Energistics 2 | 开发实例为 15.4.10 |
 | ExtendedAE | 开发实例为 1.4.19，用于扩展样板供应器接入 |
 
-1. 从 GitHub Releases 下载 `gtl-universal-patterns-1.0.31.jar`。
-2. 退出游戏和服务端，把旧的 `gtl-universal-patterns-*.jar` 移出 `mods`，放入新版本。联机时两端使用相同版本。
+1. 从 [GitHub Releases](https://github.com/winterd77/Universal-Recipe-Patterns/releases) 下载 `universal-recipe-patterns-1.0.31.jar`。
+2. 退出游戏和服务端，把旧版 JAR 移出 `mods`（旧文件名可能为 `gtl-universal-patterns-*.jar`），放入新版本。联机时两端使用相同版本。
 3. 用一个 AE2 空白样板无序合成通用样板，在 JEI 中可搜索「通用样板」。
 
-SHA-256：`c7dc8f585384247ef3a4830d96a8f0b6c8373fd4f427a14326209d65730e89a1`
+SHA-256：`fd8c7f3c2cc7b0e15aeef1461573723b52b2baf45638678852515df9c43dde70`
 
 ## 源码与构建
 
