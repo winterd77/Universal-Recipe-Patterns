@@ -1,45 +1,36 @@
 # Universal Recipe Patterns · 通用样板
 
-为 AE2 提供可复用的加工样板，目前支持 Minecraft 整合包 GregTech Leisure。一张卡可以按配方类型、材料和筛选规则收录多条已注册的配方，并保留每张卡的编辑草稿。
+一张 AE2 通用样板可以同时发布多条加工配方。用工艺、材料或输入与输出样本筛选真实注册的配方，选择要收录的变体，再交给样板供应器或样板总成自动加工。**目前仅支持 GregTech Leisure。**
 
-- 手持样板对空气右键打开编辑器。点击「应用」后，已配置的配方才会参与自动合成。
-- 支持 AE2 普通样板供应器、ExtendedAE 扩展样板供应器，以及兼容的 GTL 通配符和配方样板总成。
-- 可为催化剂等不消耗原料选择供应方式。选择「目标容器」时，机器仍需要预放所需物品或流体。
+## 下载与安装
 
-## 安装 1.0.31
+1. 使用 [GregTech Leisure 1.4.5.4](https://www.curseforge.com/minecraft/modpacks/gregtech-leisure/files/9322925)（Minecraft 1.20.1、Forge 47.x、GTCEu 1.4.4、AE2 15.4.10）。通用样板需要 Java 21 或更高版本。
+2. 安装 [官方 GTLCore 1.2.3.3-fix4](https://github.com/GNSW/GTLCore/releases/tag/version-1.2.3.3-fix4)。按上游发布说明更新，并在 `mods` 中只保留一个 GTLCore JAR。
+3. 下载 [universal-recipe-patterns-1.0.31.jar](https://github.com/winterd77/Universal-Recipe-Patterns/releases/download/v1.0.31/universal-recipe-patterns-1.0.31.jar) 放入 `mods`。升级时移出旧版通用样板 JAR（旧文件名可能以 `gtl-universal-patterns-` 开头）。联机时客户端和服务端都要安装。
 
-| 组件 | 版本 |
+### GTLCore 兼容性
+
+| GTLCore | 通用样板 1.0.31 |
 | --- | --- |
-| Minecraft / Forge | 1.20.1 / 47.x |
-| Java | 21 |
-| GTCEu | 1.4.4 |
-| GTLCore | 1.2.3.3-fix4 兼容分支。开发实例使用 `gtlcore-1.2.3.3-fix4-chain-ae-ui-recipes-v3.jar` |
-| Applied Energistics 2 | 开发实例为 15.4.10 |
-| ExtendedAE | 开发实例为 1.4.19，用于扩展样板供应器接入 |
+| CurseForge 整合包自带 `1.2.3.3` | Forge 会拒绝加载。此发布版要求精确版本 `1.2.3.3-fix4`。 |
+| 上游官方 `1.2.3.3-fix4` | 已通过全量编译、关键 Mixin 目标和机器工厂检查。完整游戏内流程待验证。 |
+| 基于 `1.2.3.3-fix4` 的自定义版 | 兼容性取决于改动。开发时使用了自定义构建，官方 fix4 的离线验证已独立完成。 |
 
-1. 从 [GitHub Releases](https://github.com/winterd77/Universal-Recipe-Patterns/releases) 下载 `universal-recipe-patterns-1.0.31.jar`。
-2. 退出游戏和服务端，把旧版 JAR 移出 `mods`（旧文件名可能为 `gtl-universal-patterns-*.jar`），放入新版本。联机时两端使用相同版本。
-3. 用一个 AE2 空白样板无序合成通用样板，在 JEI 中可搜索「通用样板」。
+## 使用
 
-SHA-256：`fd8c7f3c2cc7b0e15aeef1461573723b52b2baf45638678852515df9c43dde70`
+1. 用一个 AE2 空白样板无序合成通用样板。
+2. 手持样板对空气右键，选择工艺，再按材料、规则或输入与输出样本筛选配方。关闭界面会保存草稿。点击「应用」才会更新向网络发布的配方。
+3. 将样板放入受支持的 AE2 普通样板供应器、ExtendedAE 扩展样板供应器、GTL 通配符样板总成或配方样板总成。使用「目标容器」供给不消耗原料时，提前在机器端备好所需物品或流体。
 
-## 源码与构建
+## 从源码构建
 
-源码和资源位于 [`universal-patterns/src`](universal-patterns/src)。当前脚本沿用 Windows 与 Prism Launcher 的本地构建环境。构建需要 JDK 22（目标字节码为 Java 21）、Python 3、GregTech Leisure 1.4.5.4 的模组与库、兼容的 GTLCore 基线 JAR，以及 Forge/Minecraft 的 Mojmap 构建输入。
+`universal-patterns/src` 包含源码和资源。构建脚本使用 Windows、Python 3、JDK 22 和 Prism Launcher 的 GregTech Leisure 1.4.5.4 实例及库。编译目标为 Java 21。
 
-在仓库根目录准备以下文件：
-
-- `build/gtlcore-wireless/forge-mojmap.jar`
-- `build/gtlcore-wireless/client-mojmap.jar`
-- `build/gtlcore-wireless/srg-mojmap.tsrg`
-- `build/annotations.jar`，或通过 `GTL_ANNOTATIONS_JAR` 指定 JetBrains 注解库。
-- `dist/gtlcore-1.2.3.3-fix4-wireless-me-clusters.jar`，供编译和重映射使用。
-
-随后运行 `python universal-patterns/build.py`。完整的离线测试夹具位于 [`universal-patterns/tests`](universal-patterns/tests)，其中部分契约测试需要同一套实例、其他版本的构建产物或 GTLCore 源码。
+- 把官方 `gtlcore-1.2.3.3-fix4.jar` 放到 `build/`，或用 `GTLCORE_JAR` 指定路径。
+- 把 JetBrains 注解 JAR 放到 `build/annotations.jar`，或用 `GTL_ANNOTATIONS_JAR` 指定路径。
+- 在 `build/gtlcore-wireless/` 准备对应版本的 `forge-mojmap.jar`、`client-mojmap.jar` 和 `srg-mojmap.tsrg`。
+- 在仓库根目录运行 `python universal-patterns/build.py`，输出到 `dist/universal-recipe-patterns-1.0.31.jar`。
 
 ## 第三方许可
 
-本项目基于 GregTech Leisure 的 GTLCore 工作。现有 LGPL-3.0、GPL-3.0 和 MIT 许可文本及致谢保存在 [`META-INF/licenses`](universal-patterns/src/main/resources/META-INF/licenses)。
-
-- [GregTech Leisure](https://www.curseforge.com/minecraft/modpacks/gregtech-leisure/files/9322925)
-- [GTLCore 上游项目](https://github.com/GNSW/GTLCore)
+本项目基于 GregTech Leisure 的 GTLCore。LGPL-3.0、GPL-3.0 与 MIT 许可文本和致谢见 [`META-INF/licenses`](universal-patterns/src/main/resources/META-INF/licenses)。

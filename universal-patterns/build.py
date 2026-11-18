@@ -9,20 +9,22 @@ old = ROOT / 'build/gtlcore-wireless'
 prism = Path(os.environ['APPDATA']) / 'PrismLauncher'
 mods = prism / 'instances/GregTech-Leisure-1.4.5.4/minecraft/mods'
 libs = prism / 'libraries'
-base = ROOT / 'dist/gtlcore-1.2.3.3-fix4-wireless-me-clusters.jar'
-if not base.exists(): base = ROOT / 'dist/归档/gtlcore-1.2.3.3-fix4-wireless-me-clusters.jar'
+base = Path(os.environ.get('GTLCORE_JAR', ROOT / 'build/gtlcore-1.2.3.3-fix4.jar'))
+if not base.is_file():
+    raise SystemExit('Set GTLCORE_JAR to GTLCore 1.2.3.3-fix4 or place it in build/.')
+mod_jars = [jar for jar in mods.glob('*.jar') if not jar.name.lower().startswith('gtlcore-')]
 jdk = Path('C:/Program Files/Java/jdk-22/bin')
 classes = work / ('classes-' + uuid.uuid4().hex[:8])
 classes.mkdir(exist_ok=True)
 annotations = Path(os.environ.get('GTL_ANNOTATIONS_JAR', ROOT / 'build/annotations.jar'))
 if not annotations.is_file():
     raise SystemExit('Set GTL_ANNOTATIONS_JAR to the JetBrains annotations JAR.')
-cp = [old/'forge-mojmap.jar', old/'client-mojmap.jar', base, annotations, *mods.glob('*.jar')]
+cp = [old/'forge-mojmap.jar', old/'client-mojmap.jar', base, annotations, *mod_jars]
 cp += [p for p in libs.rglob('*.jar') if 'natives-' not in p.name and 'client-' not in p.name and 'sources' not in p.name]
 # Embedded dependencies are needed by the original client listener's signatures.
-nested = work / 'nested'
+nested = work / f'{classes.name}-nested'
 nested.mkdir(exist_ok=True)
-for jar in mods.glob('*.jar'):
+for jar in [base, *mod_jars]:
     with zipfile.ZipFile(jar) as z:
         for name in z.namelist():
             if name.startswith('META-INF/') and name.endswith('.jar'):

@@ -10,8 +10,8 @@
 
 下载 `universal-recipe-patterns-1.0.31.jar`，放入兼容实例的 `mods` 文件夹。升级时将旧版通用样板 JAR 移出 `mods`（旧文件名可能为 `gtl-universal-patterns-*.jar`）。联机时客户端和服务端需同步更新。
 
-适用环境为 Minecraft 1.20.1、Forge 47.x、Java 21、GTCEu 1.4.4、AE2 15.x 和兼容的 GTLCore 1.2.3.3-fix4。开发实例使用 AE2 15.4.10、ExtendedAE 1.4.19 及 GTLCore `fix4-chain-ae-ui-recipes-v3`。
+目前仅支持 GregTech Leisure。核对环境为 GregTech Leisure 1.4.5.4、Minecraft 1.20.1、Forge 47.x、Java 21、GTCEu 1.4.4、AE2 15.4.10 与 ExtendedAE 1.4.19。
+
+本版本要求 [官方 GTLCore 1.2.3.3-fix4](https://github.com/GNSW/GTLCore/releases/tag/version-1.2.3.3-fix4)。如果使用 CurseForge 整合包自带的 `1.2.3.3`，需要先更新 GTLCore，否则 Forge 会拒绝加载附属模组。官方 fix4 已通过全量编译、关键 Mixin 目标及配方样板总成工厂的离线检查。完整游戏内流程待验证。
 
 SHA-256：`fd8c7f3c2cc7b0e15aeef1461573723b52b2baf45638678852515df9c43dde70`
-
-这次发布准备包含构建及离线检查。游戏内运行仍待验证。
