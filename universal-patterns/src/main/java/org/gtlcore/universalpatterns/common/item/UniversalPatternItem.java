@@ -9,6 +9,7 @@ import net.minecraft.resources.ResourceLocation;
 import net.minecraft.world.item.Item;
 import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.TooltipFlag;
+import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.level.Level;
 import net.minecraftforge.eventbus.api.SubscribeEvent;
 import net.minecraftforge.event.BuildCreativeModeTabContentsEvent;
@@ -27,6 +28,7 @@ import java.util.Map;
 import java.util.LinkedHashMap;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.function.BooleanSupplier;
 import net.minecraft.nbt.CompoundTag;
 
 @Mod.EventBusSubscriber(modid = "gtluniversalpatterns", bus = Mod.EventBusSubscriber.Bus.MOD)
@@ -38,6 +40,38 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
     private static final String ALLOW = "AllowRule";
     private static final String DENY = "DenyRule";
     private static final ResourceLocation ID = GTLCore.id("universal_pattern");
+    private static final String PLAYER_SUPPLY = "gtluniversalpatterns.defaultSupplyMode";
+
+    public static int personalSupplyMode(CompoundTag playerData) {
+        var saved = playerData.getCompound(Player.PERSISTED_NBT_TAG);
+        if (!saved.contains(PLAYER_SUPPLY,Tag.TAG_INT)) return -1;
+        int mode = saved.getInt(PLAYER_SUPPLY);
+        return mode >= 0 && mode <= 3 ? mode : -1;
+    }
+
+    public static void setPersonalSupplyMode(CompoundTag playerData, int mode) {
+        if (mode < -1 || mode > 3) throw new IllegalArgumentException("Invalid supply mode");
+        var saved = playerData.getCompound(Player.PERSISTED_NBT_TAG);
+        saved.putInt(PLAYER_SUPPLY,mode);
+        playerData.put(Player.PERSISTED_NBT_TAG,saved);
+    }
+
+    public static boolean needsSupplyPreference(ItemStack stack) {
+        if (!(stack.getItem() instanceof UniversalPatternItem)) return false;
+        var tag = stack.getTag();
+        return tag == null || !tag.contains("DefaultSupplyMode") && !tag.contains(FAMILY) && !tag.contains("UniversalDraft");
+    }
+
+    private static void inheritSupplyPreference(ItemStack stack, Player player) {
+        if (needsSupplyPreference(stack))
+            stack.getOrCreateTag().putInt("DefaultSupplyMode",personalSupplyMode(player.getPersistentData()));
+    }
+
+    @Override
+    public void onCraftedBy(ItemStack stack, Level level, Player player) {
+        super.onCraftedBy(stack,level,player);
+        if (!level.isClientSide) inheritSupplyPreference(stack,player);
+    }
 
     private UniversalPatternItem() {
         super(new Properties().stacksTo(1));
@@ -45,8 +79,10 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
 
     @Override
     public net.minecraft.world.InteractionResultHolder<ItemStack> use(Level level, net.minecraft.world.entity.player.Player player, net.minecraft.world.InteractionHand hand) {
-        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer)
+        if (player instanceof net.minecraft.server.level.ServerPlayer serverPlayer) {
+            inheritSupplyPreference(player.getItemInHand(hand),player);
             com.lowdragmc.lowdraglib.gui.factory.HeldItemUIFactory.INSTANCE.openUI(serverPlayer,hand);
+        }
         return net.minecraft.world.InteractionResultHolder.sidedSuccess(player.getItemInHand(hand),level.isClientSide);
     }
 
@@ -73,7 +109,19 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
     }
 
     public record Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded,
-                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides) {
+                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides, int outputMultiplier, int batchMultiplier, boolean keepByproducts, int defaultSupplyMode, Map<String,String> itemChoices) {
+    public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded,
+                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides, int outputMultiplier, int batchMultiplier, boolean keepByproducts, int defaultSupplyMode) {
+            this(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes, requiredFluid,
+                    fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs, pendingSync,
+                    recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, Map.of());
+        }
+
+        public Selection withItemChoices(Map<String,String> values) {
+            return new Selection(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes,
+                    requiredFluid, fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs,
+                    pendingSync, recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, values);
+        }
         public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded, String allow, String deny, Map<ResourceLocation,String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs) {
             this(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,Set.of(),Map.of());
         }
@@ -89,17 +137,63 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
         public Selection(String family,Set<ResourceLocation> materials,Set<ResourceLocation> excluded,String allow,String deny,Map<ResourceLocation,String> recipes,boolean externalCatalysts,Map<String,Integer> catalystModes,String requiredFluid,Set<String> fixedInputs,Set<String> ignoredInputs,Map<String,Long> extraInputs,Set<String> ignoredOutputs,Map<String,Long> extraOutputs,Map<String,String> primaryOutputs,Map<String,String> pendingSync){
             this(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,Map.of());
         }
+        public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded,
+                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides) {
+            this(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes, requiredFluid, fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs, pendingSync, recipeOverrides, 1);
+        }
+
+        public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded,
+                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides, int outputMultiplier) {
+            this(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes, requiredFluid,
+                    fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs, pendingSync,
+                    recipeOverrides, outputMultiplier, 1);
+        }
+
+        public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded,
+                            String allow, String deny, Map<ResourceLocation, String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid, Set<String> fixedInputs, Set<String> ignoredInputs, Map<String,Long> extraInputs, Set<String> ignoredOutputs, Map<String,Long> extraOutputs, Map<String,String> primaryOutputs, Map<String,String> pendingSync, Map<String,Boolean> recipeOverrides, int outputMultiplier, int batchMultiplier) {
+            this(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes, requiredFluid,
+                    fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs, pendingSync,
+                    recipeOverrides, outputMultiplier, batchMultiplier, false, -1);
+        }
+
+        public Selection withDefaults(boolean keep, int mode) {
+            return new Selection(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes,
+                    requiredFluid, fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs,
+                    pendingSync, recipeOverrides, outputMultiplier, batchMultiplier, keep, mode, itemChoices);
+        }
+
+        public Selection withOutputMultiplier(int factor) {
+            return withMultipliers(factor, batchMultiplier);
+        }
+
+        public Selection withMultipliers(int yield, int batch) {
+            return new Selection(family, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes,
+                    requiredFluid, fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs,
+                    pendingSync, recipeOverrides, yield, batch, keepByproducts, defaultSupplyMode, itemChoices);
+        }
+        /** Applies the card rules after the host has checked machine and ingredient constraints. */
+        public int recipeReason(String recipeId, ResourceLocation material, BooleanSupplier allowRule, BooleanSupplier denyRule) {
+            Boolean override = recipeOverrides.get(recipeId);
+            if (override != null) return override ? 1 : 4;
+            if (excluded.contains(material)) return 4;
+            if (denyRule.getAsBoolean()) return 5;
+            String chosen = recipes.get(material);
+            if (chosen != null && !chosen.equals(recipeId)) return 6;
+            if (materials.contains(material)) return 1;
+            return allowRule.getAsBoolean() ? 0 : 7;
+        }
+
         public Selection withRecipeOverride(String id,Boolean enabled){
             var values=new HashMap<>(recipeOverrides);if(enabled==null)values.remove(id);else values.put(id,enabled);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,values);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,values, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withPendingSync(String id,String value){
             var pending=new LinkedHashMap<>(pendingSync);if(value==null)pending.remove(id);else pending.put(id,value);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pending,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pending,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withPrimaryOutput(String material,String encoded) {
             var values=new HashMap<>(primaryOutputs);if(encoded.isEmpty())values.remove(material);else values.put(material,encoded);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,values,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,values,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection forMaterial(String material) {
             String prefix=material+"\n";var ignored=new HashSet<String>();var extra=new HashMap<String,Long>();
@@ -109,7 +203,7 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
             for(var key:ignoredInputs)if(key.startsWith(prefix)&&!key.equals(prefix+"@"))inputIgnored.add(key.substring(prefix.length()));else if(!scoped&&!key.contains("\n"))inputIgnored.add(key);
             for(var entry:extraInputs.entrySet())if(!scoped&&!entry.getKey().contains("\n"))inputExtra.put(entry.getKey(),entry.getValue());
             for(var entry:extraInputs.entrySet())if(entry.getKey().startsWith(prefix))inputExtra.put(entry.getKey().substring(prefix.length()),entry.getValue());
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,inputIgnored,inputExtra,ignored,extra,primaryOutputs.containsKey(material)?Map.of(material,primaryOutputs.get(material)):Map.of(),Map.of());
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,inputIgnored,inputExtra,ignored,extra,primaryOutputs.containsKey(material)?Map.of(material,primaryOutputs.get(material)):Map.of(),Map.of(), Map.of(), outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection forOutputMaterial(String material) { return forMaterial(material); }
         /** Snapshot inherited legacy defaults once, so clearing a local edit cannot re-enable a global entry. */
@@ -118,18 +212,18 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
             var effective=forMaterial(material);var ignored=new HashSet<>(ignoredInputs);var extra=new HashMap<>(extraInputs);
             ignored.add(prefix+"@");for(var key:effective.ignoredInputs)ignored.add(prefix+key);
             effective.extraInputs.forEach((key,value)->extra.put(prefix+key,value));
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignored,extra,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignored,extra,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withIgnoredOutput(String identity,boolean ignored) {
             var values=new HashSet<>(ignoredOutputs);if(ignored)values.add(identity);else values.remove(identity);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,values,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,values,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withExtraOutput(String encoded,long amount) {
             var values=new HashMap<>(extraOutputs);if(amount==0)values.remove(encoded);else values.put(encoded,amount);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,values,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,values,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withDeliveryFrom(Selection old) {
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,old.ignoredInputs,old.extraInputs,old.ignoredOutputs,old.extraOutputs,old.primaryOutputs,old.pendingSync,recipeOverrides.isEmpty()?old.recipeOverrides:recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,old.ignoredInputs,old.extraInputs,old.ignoredOutputs,old.extraOutputs,old.primaryOutputs,old.pendingSync,recipeOverrides.isEmpty()?old.recipeOverrides:recipeOverrides, old.outputMultiplier, old.batchMultiplier, old.keepByproducts, old.defaultSupplyMode, old.itemChoices);
         }
 
         public Selection withFamily(String nextFamily) {
@@ -142,15 +236,15 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
             }
             return new Selection(nextFamily, materials, excluded, allow, deny, recipes, externalCatalysts, catalystModes,
                     requiredFluid, fixedInputs, ignoredInputs, extraInputs, ignoredOutputs, extraOutputs, primaryOutputs,
-                    migrated, recipeOverrides);
+                    migrated, recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withIgnoredInput(String identity,boolean ignored) {
             var values=new HashSet<>(ignoredInputs);if(ignored)values.add(identity);else values.remove(identity);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,values,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,values,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withExtraInput(String encoded,long amount) {
             var values=new HashMap<>(extraInputs);if(amount==0)values.remove(encoded);else values.put(encoded,amount);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,values,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,fixedInputs,ignoredInputs,values,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded, String allow, String deny, Map<ResourceLocation,String> recipes, boolean externalCatalysts, Map<String,Integer> catalystModes, String requiredFluid) {
             this(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,requiredFluid,Set.of());
@@ -163,13 +257,13 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
         }
         public Selection withFixedInput(String identity,boolean fixed) {
             var keys=new HashSet<>(requiredInputs());if(fixed)keys.add(identity);else keys.remove(identity);
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,"",keys,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,"",keys,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withoutFixedInputs() {
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,"",Set.of(),ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,"",Set.of(),ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withRequiredFluid(String identity) {
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,identity,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,catalystModes,identity,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded, String allow, String deny, Map<ResourceLocation, String> recipes) {
             this(family, materials, excluded, allow, deny, recipes, false);
@@ -184,21 +278,26 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
             return withCatalystMode(identity, external ? 1 : 0);
         }
         public Selection withCatalystMode(String identity, int mode) {
-            if(mode<0 || mode>3)throw new IllegalArgumentException("Invalid catalyst supply mode");
-            var modes=new HashMap<>(catalystModes);modes.put(identity,mode);
+            if(mode< -1 || mode>3)throw new IllegalArgumentException("Invalid catalyst supply mode");
+            var modes=new HashMap<>(catalystModes);
+            if (mode == -1) modes.remove(identity); else modes.put(identity,mode);
             if(modes.size()>MAX_MATERIALS)throw new IllegalArgumentException("Too many catalyst overrides");
-            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,modes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,externalCatalysts,modes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection withSupplyFrom(Selection old) {
-            return new Selection(family,materials,excluded,allow,deny,recipes,old.externalCatalysts,old.catalystModes,old.requiredFluid,old.fixedInputs,old.ignoredInputs,old.extraInputs,old.ignoredOutputs,old.extraOutputs,old.primaryOutputs,old.pendingSync,recipeOverrides);
+            return new Selection(family,materials,excluded,allow,deny,recipes,old.externalCatalysts,old.catalystModes,old.requiredFluid,old.fixedInputs,old.ignoredInputs,old.extraInputs,old.ignoredOutputs,old.extraOutputs,old.primaryOutputs,old.pendingSync,recipeOverrides, family.equals(old.family) ? old.outputMultiplier : 1, family.equals(old.family) ? old.batchMultiplier : 1, old.keepByproducts, old.defaultSupplyMode, old.itemChoices);
         }
         public Selection withExternalCatalysts(boolean value) {
-            return new Selection(family, materials, excluded, allow, deny, recipes, value, catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides);
+            return new Selection(family, materials, excluded, allow, deny, recipes, value, catalystModes,requiredFluid,fixedInputs,ignoredInputs,extraInputs,ignoredOutputs,extraOutputs,primaryOutputs,pendingSync,recipeOverrides, outputMultiplier, batchMultiplier, keepByproducts, defaultSupplyMode, itemChoices);
         }
         public Selection(String family, Set<ResourceLocation> materials, Set<ResourceLocation> excluded, String allow, String deny) {
             this(family, materials, excluded, allow, deny, Map.of());
         }
         public Selection {
+            itemChoices = Map.copyOf(itemChoices);
+            if (itemChoices.size() > MAX_MATERIALS) throw new IllegalArgumentException("Too many item preferences");
+            if (defaultSupplyMode < -1 || defaultSupplyMode > 3) throw new IllegalArgumentException("Invalid default supply mode");
+            if (outputMultiplier < 1 || batchMultiplier < 1) throw new IllegalArgumentException("Multipliers must be positive");
             recipeOverrides=Map.copyOf(recipeOverrides);
             if(recipeOverrides.size()>4096||recipeOverrides.keySet().stream().anyMatch(k->k.isBlank()||k.length()>1024))throw new IllegalArgumentException("Invalid recipe overrides");
             pendingSync=Map.copyOf(pendingSync);
@@ -234,7 +333,43 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
         String family = tag.getString(FAMILY);
         if (family.length() > 512) return Selection.empty();
         return new Selection(family, readMaterials(tag.getList(MATERIALS, Tag.TAG_STRING)),
-                readMaterials(tag.getList(EXCLUDED, Tag.TAG_STRING)), readRule(tag.getString(ALLOW)), readRule(tag.getString(DENY)), readRecipes(tag.getCompound("RecipeChoices")), tag.getBoolean("ExternalCatalysts"), readCatalystModes(tag.getCompound("CatalystModes")), readFluidConstraint(tag), readFixedInputs(tag), readIgnoredInputs(tag), readExtraInputs(tag), readIgnoredOutputs(tag), readExtraOutputs(tag), readPrimaryOutputs(tag), readPendingSync(tag),readRecipeOverrides(tag));
+                readMaterials(tag.getList(EXCLUDED, Tag.TAG_STRING)), readRule(tag.getString(ALLOW)), readRule(tag.getString(DENY)), readRecipes(tag.getCompound("RecipeChoices")), tag.getBoolean("ExternalCatalysts"), readCatalystModes(tag.getCompound("CatalystModes")), readFluidConstraint(tag), readFixedInputs(tag), readIgnoredInputs(tag), readExtraInputs(tag), readIgnoredOutputs(tag), readExtraOutputs(tag), readPrimaryOutputs(tag), readPendingSync(tag),readRecipeOverrides(tag), Math.max(1, tag.getInt("OutputMultiplier")), Math.max(1, tag.getInt("BatchMultiplier")), tag.getBoolean("KeepByproducts"),
+                tag.contains("DefaultSupplyMode", Tag.TAG_INT) ? Math.max(-1, Math.min(3, tag.getInt("DefaultSupplyMode"))) : -1, readItemChoices(tag));
+    }
+
+    private static Map<String,String> readItemChoices(CompoundTag tag) {
+        var result = new HashMap<String,String>();
+        var choices = tag.getCompound("ItemSubstitutions");
+        for (String group : choices.getAllKeys()) {
+            String choice = choices.getString(group);
+            if (result.size() < MAX_MATERIALS && group.matches("[0-9a-f]{64}") && choice.matches("[0-9a-f]{64}"))
+                result.put(group, choice);
+        }
+        return Map.copyOf(result);
+    }
+
+    private static void writeItemChoices(CompoundTag tag, Map<String,String> values) {
+        if (values.isEmpty()) {
+            tag.remove("ItemSubstitutions");
+            return;
+        }
+        var choices = new CompoundTag();
+        values.forEach(choices::putString);
+        tag.put("ItemSubstitutions", choices);
+    }
+
+    private static final String PLAYER_ITEMS = "gtluniversalpatterns.items";
+
+    public static Map<String,String> personalItemChoices(CompoundTag playerData) {
+        return readItemChoices(playerData.getCompound(Player.PERSISTED_NBT_TAG).getCompound(PLAYER_ITEMS));
+    }
+
+    public static void savePersonalItemChoices(CompoundTag playerData, Map<String,String> values) {
+        var persisted = playerData.getCompound(Player.PERSISTED_NBT_TAG);
+        var items = new CompoundTag();
+        writeItemChoices(items, values);
+        persisted.put(PLAYER_ITEMS, items);
+        playerData.put(Player.PERSISTED_NBT_TAG, persisted);
     }
 
     private static Map<String,Boolean> readRecipeOverrides(CompoundTag tag){
@@ -330,6 +465,11 @@ public final class UniversalPatternItem extends Item implements com.lowdragmc.lo
 
     private static void writeSelection(CompoundTag tag, Selection selection) {
         tag.putString(FAMILY, selection.family());
+        writeItemChoices(tag, selection.itemChoices());
+        tag.putInt("OutputMultiplier", selection.outputMultiplier());
+        tag.putInt("BatchMultiplier", selection.batchMultiplier());
+        tag.putBoolean("KeepByproducts", selection.keepByproducts());
+        tag.putInt("DefaultSupplyMode", selection.defaultSupplyMode());
         var pending=new CompoundTag();selection.pendingSync().forEach(pending::putString);tag.put("PendingSync",pending);
         var primary=new CompoundTag();selection.primaryOutputs().forEach(primary::putString);tag.put("PrimaryOutputs",primary);
         var ignored=new ListTag();selection.ignoredInputs().stream().sorted().forEach(k->ignored.add(StringTag.valueOf(k)));tag.put("IgnoredInputs",ignored);

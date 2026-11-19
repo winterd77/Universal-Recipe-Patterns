@@ -5,6 +5,9 @@ import org.gtlcore.gtlcore.api.gui.RecipePatternUiTextures;
 import org.gtlcore.gtlcore.client.ae2.wireless.UniversalSearch;
 import org.gtlcore.universalpatterns.integration.ae2.handler.PatternEditorHost;
 import org.gtlcore.universalpatterns.integration.ae2.handler.RegisteredProcessFamilies;
+import org.gtlcore.universalpatterns.integration.ae2.handler.RecipeYield;
+import org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy;
+import org.gtlcore.universalpatterns.integration.ae2.handler.ItemSubstitutions;
 import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternFilter;
 import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternFilter.Rule;
 import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternFilter.Target;
@@ -13,10 +16,12 @@ import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternHelper.RecipeP
 import org.gtlcore.universalpatterns.integration.ae2.handler.UniversalPatternFamily;
 import org.gtlcore.universalpatterns.integration.ae2.handler.MaterialExpression;
 import org.gtlcore.universalpatterns.common.item.UniversalPatternItem.Selection;
+import org.gtlcore.universalpatterns.common.item.UniversalPatternItem;
 import org.gtlcore.universalpatterns.integration.ae2.handler.UniversalMaterialRules;
 import net.minecraft.resources.ResourceLocation;
 
 import com.gregtechceu.gtceu.api.gui.GuiTextures;
+import com.gregtechceu.gtceu.api.registry.GTRegistries;
 import com.lowdragmc.lowdraglib.gui.texture.*;
 import com.lowdragmc.lowdraglib.gui.widget.*;
 import com.lowdragmc.lowdraglib.misc.FluidStorage;
@@ -112,12 +117,28 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         }
     }
 
-    private record InputView(String id, GenericStack stack, int alternatives, boolean customised) {}
+    private record InputView(String id, GenericStack stack, int alternatives, boolean customised, AEKey deliveryKey) {}
 
     private final PatternEditorHost machine;
     private final Page page;
     private final boolean compact;
     private boolean browsingFamily;
+    private static final int FAMILY_QUERY = 64;
+    private String familyQuery = "";
+    private BitSet matchingFamilyLabels = new BitSet();
+    private FamilyRecipeSearch familyIndex;
+    private String indexedFamily = "";
+    private List<RecipePattern> indexedRecipes = List.of();
+    private List<Component> familyLabels = List.of();
+    private int familyIndexVersion, sentFamilyIndexVersion = -1;
+    private long indexedGeneration = -1;
+    private TextFieldWidget familyField;
+    private Widget familyPlaceholder;
+    private int familyQueryDelay;
+
+    private static final int CARD_ITEM_CHOICE = 63;
+    private int substitutionSlotPage;
+
     private int searchResetRevision, receivedSearchResetRevision;
     private static final int SHOW_FAMILY = 42;
     private static final int SET_CATALYST_MODE = 43;
@@ -140,6 +161,14 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     private String deliveryAmount="1";
     private String deliveryMessage="";
     private boolean groupVariants=true;
+    private static final int SET_MULTIPLIERS = 60;
+    private static final int SET_CARD_DEFAULTS = 61;
+    private static final int SET_PERSONAL_SUPPLY = 62;
+    private boolean keepByproducts, canNarrowRoute;
+    private int defaultSupplyMode = -1, personalSupplyMode = -1;
+    private int outputMultiplier = 1;
+    private int batchMultiplier = 1;
+    private String focusToggledRecipe = "";
     private final Map<String,Integer> variantGroupSizes=new HashMap<>();
     private List<GenericStack> familyFluids=List.of();
     private final Map<AEKey,List<GenericStack>> constraintCandidates=new HashMap<>();
@@ -161,6 +190,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     private final WidgetGroup recipeListRows = new WidgetGroup(176, 78, 146, RECIPE_LIST_PAGE_SIZE * 28).setClientSideWidget();
     private String search = "";
     private Set<String> localizedMaterials = Set.of();
+    private Set<ResourceLocation> localizedTypes = Set.of();
     private List<RecipePattern> searchResults = List.of();
     private String selectedId = "";
     private List<GenericStack> selectedInputs = List.of();
@@ -176,7 +206,6 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     private AEKey selectedPrimary;
     private int selectedStatus;
     private boolean selectedWhitelisted;
-    private boolean selectedOnPattern;
     private boolean selectedInFamily;
     private boolean canExpandCasting;
     private boolean catalogReady;
@@ -193,7 +222,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
 
     private final Map<Integer, Selection> drafts = new HashMap<>();
     private final Map<Integer, ItemStack> originals = new HashMap<>();
-    private int selectedMaterialState, selectedVariants;
+    private int selectedVariants;
     private String selectedReasonLabel = "";
     private boolean draftChanged;
     private String draftMessage = "";
@@ -202,19 +231,30 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         ItemStack current = machine.universalCardSnapshot(universalSlot);
         if (!originals.containsKey(universalSlot) || !ItemStack.matches(originals.get(universalSlot), current)) {
             originals.put(universalSlot, current);
-            drafts.put(universalSlot, org.gtlcore.universalpatterns.common.item.UniversalPatternItem.readDraft(current));
+            var saved = UniversalPatternItem.readDraft(current);
+            if (gui != null && UniversalPatternItem.needsSupplyPreference(current))
+                saved = saved.withDefaults(saved.keepByproducts(), UniversalPatternItem.personalSupplyMode(gui.entityPlayer.getPersistentData()));
+            if (gui != null && current.getItem() instanceof UniversalPatternItem) {
+                var inherited = new HashMap<>(UniversalPatternItem.personalItemChoices(gui.entityPlayer.getPersistentData()));
+                saved.itemChoices().forEach(inherited::put);
+                if (inherited.size() <= UniversalPatternItem.MAX_MATERIALS) saved = saved.withItemChoices(inherited);
+            }
+            drafts.put(universalSlot, saved);
         }
         return drafts.get(universalSlot);
     }
 
-    private void storeDraft(Selection selection) {
+    private boolean storeDraft(Selection selection) {
         long beforeRevision = machine.getConfigurationRevision();
         if (beforeRevision != lastDraftWriteRevision) draftBaseRevision = beforeRevision;
         if (machine.storeUniversalDraft(universalSlot, originals.get(universalSlot), selection)) {
             lastDraftWriteRevision = machine.getConfigurationRevision();
             originals.put(universalSlot, machine.universalCardSnapshot(universalSlot));
             drafts.put(universalSlot, selection);
-        } else ruleFeedback = Component.translatable(PREFIX + "draft_conflict");
+            return true;
+        }
+        ruleFeedback = Component.translatable(PREFIX + "draft_conflict");
+        return false;
     }
 
     private UniversalPatternFamily.Candidate draftCandidate(String id) {
@@ -231,6 +271,23 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         return machine.universalReason(draft(), id);
     }
 
+    private boolean validMultipliers(Selection selection) {
+        if (selection.batchMultiplier() == 1 && selection.outputMultiplier() == 1) return true;
+        try {
+            for (var recipe : machine.familyRecipes(selection.family())) {
+                var candidate = machine.candidateForFamily(recipe.id(), selection.family());
+                if (candidate == null || machine.universalReason(selection,recipe.id()) > 2) continue;
+                var policy = selection.forMaterial(candidate.materialId().toString());
+                ItemSubstitutions.inputs(policy, recipe, InputSlot::defaultKey);
+                DeliveryPolicy.outputs(policy,recipe,candidate.output(),machine.getLevel());
+            }
+            return true;
+        } catch (IllegalArgumentException | ArithmeticException invalid) {
+            ruleFeedback = Component.translatable(PREFIX+"output.multiplier_invalid");
+            return false;
+        }
+    }
+
     private void editDraft(PatternEdit edit, List<String> ids) {
         Selection before = draft();
         ruleFeedback = Component.empty();
@@ -243,6 +300,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 ruleFeedback = Component.translatable(PREFIX + "pattern_invalid", invalid.getMessage());
                 return;
             }
+            if (!validMultipliers(before)) return;
             if (machine.applyUniversalDraft(universalSlot, originals.get(universalSlot), before)) {
                 originals.put(universalSlot, machine.universalCardSnapshot(universalSlot));
                 ruleFeedback = Component.translatable(PREFIX + "draft_applied");
@@ -275,12 +333,12 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             return;
         }
         if (edit == PatternEdit.BIND) {
-            // Existing cards keep their legacy family until the player explicitly unbinds it.
-            if (!before.family().isEmpty() && machine.candidateForFamily(selectedId,before.family())!=null) {
-                showFamily(); return;
-            }
             var candidate = machine.universalCandidate(selectedId);
             if (candidate == null || !editableStatus(machine.getRecipeStatus(selectedId))) return;
+            if (!before.family().isEmpty() && machine.candidateForFamily(selectedId,before.family())!=null) {
+                if (before.family().equals(candidate.baseFamily())) storeDraft(before.withFamily(candidate.family()));
+                showFamily(); return;
+            }
             if (!candidate.family().equals(before.family()))
                 storeDraft(new Selection(candidate.family(), Set.of(), Set.of(), "all", "").withSupplyFrom(before));
             showFamily();
@@ -381,6 +439,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     @Override
     public boolean keyPressed(int keyCode, int scanCode, int modifiers) {
         if (page == Page.UNIVERSAL && keyCode == GLFW.GLFW_KEY_ESCAPE) {
+            if (inputChooser.isVisible()) { send(CLOSE_INPUT_OPTIONS,b -> {}); return true; }
             if (supplyChooser.isVisible()) { closeSupplyChooser(); return true; }
             if (universalOptions.isVisible()) { closeUniversalOptions(); return true; }
             if (ruleEditor.isVisible()) { ruleEditor.closeTopLayer(); return true; }
@@ -460,8 +519,22 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         view.addWidget(universal ? new ImageWidget(154, 28, 174, 178, GuiTextures.BACKGROUND) : panel(154, 28, 174, 178));
         int panelText = universal ? NATIVE_PANEL_TEXT : TEXT_COLOR;
         int panelDetail = universal ? NATIVE_PANEL_TEXT : MUTED_COLOR;
-        view.addWidget(line(8, 31, 136, 12, () -> searchFeedback.getString().isEmpty() ?
+        view.addWidget(line(8, 31, universal ? 70 : 136, 12, () -> searchFeedback.getString().isEmpty() ?
                 text(browsingFamily ? "family_results_label" : "results_label", searchCount) : searchFeedback.getString(), panelDetail));
+        if (universal) {
+            familyField = new TextFieldWidget(79,30,65,14,() -> familyQuery, value -> {
+                if (!value.equals(familyQuery)) {
+                    familyQuery = value;
+                    familyQueryDelay = 4;
+                }
+            }).setMaxStringLength(96).setBordered(false).setTextColor(0xFFFFFFFF).setBackground(GuiTextures.SLOT_DARK);
+            familyField.setHoverTooltips(Component.translatable(PREFIX+"family_search_hint"));
+            view.addWidget(familyField);
+            familyPlaceholder = line(82,31,60,12,() -> text("family_search"),0xFFB8B8B8);
+            view.addWidget(familyPlaceholder);
+            familyPlaceholder.setVisible(false).setActive(false);
+            familyField.setVisible(false).setActive(false);
+        }
         view.addWidget(recipeRows);
         addPager(view, 8, 190, 136, () -> searchPage, () -> pages(searchCount, resultPageSize()), delta -> sendPage(SEARCH_PAGE, delta));
         if (!universal) {
@@ -552,6 +625,12 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         expandCasting.setVisible(false).setActive(false);
         universalOptions.addWidget(expandCasting);
         pagerVisibility.add(() -> expandCasting.setVisible(canExpandCasting).setActive(canExpandCasting));
+        var narrow = button(178,43,100,16,() -> text("route.narrow"),() -> {
+            editPattern(PatternEdit.BIND); closeUniversalOptions();
+        });
+        narrow.setVisible(false).setActive(false);
+        universalOptions.addWidget(narrow);
+        pagerVisibility.add(() -> narrow.setVisible(canNarrowRoute).setActive(canNarrowRoute));
         universalOptions.addWidget(button(284, 43, 18, 16, () -> "X", this::closeUniversalOptions));
         universalOptions.addWidget(line(30, 63, 272, 12, () -> text("variant_section", selectedVariants), NATIVE_PANEL_TEXT));
         universalOptions.addWidget(button(30, 79, 132, 18, () -> text("variant_choose", selectedVariants), () -> {
@@ -560,18 +639,27 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         universalOptions.addWidget(button(170, 79, 132, 18, () -> text("variant_all"), () -> {
             editPattern(PatternEdit.ALL_RECIPES); closeUniversalOptions();
         }));
-        universalOptions.addWidget(line(30, 101, 272, 12, () -> selectedId, NATIVE_PANEL_TEXT));
-        universalOptions.addWidget(line(30, 119, 272, 12, () -> text("bulk_section", searchCount), NATIVE_PANEL_TEXT));
-        universalOptions.addWidget(button(30, 135, 132, 18, () -> text("pattern_bulk"), () -> {
+        universalOptions.addWidget(button(30,100,132,17,() -> text(keepByproducts ? "outputs.all" : "outputs.primary"),
+                () -> setCardDefaults(!keepByproducts,defaultSupplyMode)));
+        universalOptions.addWidget(button(170, 100, 132, 17, () -> text("multipliers.summary", batchMultiplier, outputMultiplier),
+                () -> { closeUniversalOptions(); openMultiplier(); }));
+        universalOptions.addWidget(button(30,119,132,17,() -> text("supply.default",text("ingredients.supply_mode."+defaultSupplyMode)),
+                () -> setCardDefaults(keepByproducts, defaultSupplyMode == 3 ? -1 : defaultSupplyMode+1))
+                .setHoverTooltips(Component.translatable(PREFIX+"supply.default_hint")));
+        universalOptions.addWidget(button(170,119,132,17,() -> text("supply.personal",text("ingredients.supply_mode."+personalSupplyMode)),
+                () -> send(SET_PERSONAL_SUPPLY,b -> b.writeVarInt(personalSupplyMode == 3 ? -1 : personalSupplyMode+1)))
+                .setHoverTooltips(Component.translatable(PREFIX+"supply.personal_hint")));
+        universalOptions.addWidget(line(30, 138, 272, 12, () -> text("bulk_section", searchCount), NATIVE_PANEL_TEXT));
+        universalOptions.addWidget(button(30, 151, 132, 18, () -> text("pattern_bulk"), () -> {
             editPattern(PatternEdit.ADD_RESULTS); closeUniversalOptions();
         }).setHoverTooltips(Component.translatable(PREFIX + "pattern_bulk_hint")));
-        universalOptions.addWidget(button(170, 135, 132, 18, () -> text("pattern_bulk_remove"), () -> {
+        universalOptions.addWidget(button(170, 151, 132, 18, () -> text("pattern_bulk_remove"), () -> {
             editPattern(PatternEdit.REMOVE_RESULTS); closeUniversalOptions();
         }).setHoverTooltips(Component.translatable(PREFIX + "pattern_bulk_hint")));
-        universalOptions.addWidget(button(30, 165, 132, 18, () -> text("visibility." + searchVisibility.name().toLowerCase(Locale.ROOT)), () -> {
+        universalOptions.addWidget(button(30, 173, 132, 18, () -> text("visibility." + searchVisibility.name().toLowerCase(Locale.ROOT)), () -> {
             send(SEARCH_VISIBILITY, buffer -> buffer.writeEnum(nextVisibility()));
         }).setHoverTooltips(Component.translatable(PREFIX + "visibility_hint")));
-        universalOptions.addWidget(button(170, 165, 132, 18, () -> text("draft_revert"), () -> {
+        universalOptions.addWidget(button(170, 173, 132, 18, () -> text("draft_revert"), () -> {
             ruleEditor.setDraftContext(""); ruleEditor.close();
             editPattern(PatternEdit.REVERT); closeUniversalOptions();
         }));
@@ -586,6 +674,12 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     }
 
     private void closeSupplyChooser() { pendingSyncOpen=false;activeDeliveryKey=null;supplyChooser.setVisible(false).setActive(false); }
+
+    private void setCardDefaults(boolean keep, int mode) {
+        send(SET_CARD_DEFAULTS,b -> {
+            b.writeVarLong(patternRevision); b.writeVarInt(universalSlot); b.writeBoolean(keep); b.writeVarInt(mode);
+        });
+    }
 
     private List<GenericStack> familyFluidOptions() {
         var family=draft().family();
@@ -684,13 +778,19 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             }).setHoverTooltips(Component.translatable(PREFIX+"ingredients.supply_hint."+mode)));
         }
         supplyChooser.addWidget(button(66,198,200,21,()->text(together[0]?"ingredients.group_on":"ingredients.group_off"),()->together[0]=!together[0]).setHoverTooltips(Component.translatable(PREFIX+"ingredients.group_hint")));
-        supplyChooser.addWidget(line(66,225,200,18,()->text("ingredients.supply_draft"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(button(66,225,200,18,()->text("supply.follow"),()->{
+            send(together[0]?SET_CATALYST_GROUP:SET_CATALYST_MODE,b -> {
+                b.writeVarLong(revision); b.writeVarInt(slot); b.writeUtf(recipe,1024); writeSample(b,stack.what()); b.writeVarInt(-1);
+            });
+            closeSupplyChooser();
+        }));
         supplyChooser.setVisible(true).setActive(true);
     }
 
     private boolean deliveryIgnored(AEKey key){return ignoredDelivery.contains(org.gtlcore.universalpatterns.integration.ae2.handler.CatalystSupply.identity(key));}
     private boolean outputIgnored(AEKey key){return ignoredOutputs.contains(org.gtlcore.universalpatterns.integration.ae2.handler.CatalystSupply.identity(key));}
     private void openInputDelivery(GenericStack stack){
+        if (!stack.what().equals(activeDeliveryKey)) substitutionSlotPage = 0;
         activeDeliveryKey=stack.what();activeDeliveryOutput=false;activeDeliveryRecipe=selectedId;
         final long revision=patternRevision;final int slot=universalSlot;AEKey key=stack.what();
         supplyChooser.clearAllWidgets();int height=compact?294:268;supplyChooser.setSizeHeight(height);
@@ -705,6 +805,24 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             send(SET_DELIVERY_IGNORE,b->{b.writeVarLong(revision);b.writeVarInt(slot);writeSample(b,key);b.writeBoolean(!deliveryIgnored(key));});closeSupplyChooser();
         }));
         supplyChooser.addWidget(button(66,130,200,20,()->text("delivery.extra"),()->openExtraDelivery(key)));
+        var candidates = selectedInputViews.stream().filter(input -> selectedInFamily && input.stack().what().equals(key)
+                && input.stack().what() instanceof AEItemKey && input.alternatives() > 1).toList();
+        if (!candidates.isEmpty()) {
+            substitutionSlotPage = clampPage(substitutionSlotPage, candidates.size(), 1);
+            var input = candidates.get(substitutionSlotPage);
+            String recipe = selectedId;
+            supplyChooser.addWidget(button(66,156,candidates.size() > 1 ? 162 : 200,20,
+                    () -> text("delivery.substitute", input.deliveryKey().getDisplayName().getString()), () -> {
+                closeSupplyChooser();
+                send(INPUT_OPTIONS, b -> { b.writeUtf(recipe,1024); b.writeUtf(input.id(),64); });
+            }).setHoverTooltips(Component.literal(input.id() + " · " + input.deliveryKey().getId()),
+                    Component.translatable(PREFIX+"delivery.substitute_hint")));
+            if (candidates.size() > 1) supplyChooser.addWidget(button(232,156,34,20,
+                    () -> (substitutionSlotPage + 1) + "/" + candidates.size(), () -> {
+                substitutionSlotPage = (substitutionSlotPage + 1) % candidates.size();
+                openInputDelivery(stack);
+            }));
+        }
         if(extraDelivery.stream().anyMatch(v->v.what().equals(key)))supplyChooser.addWidget(button(66,182,200,20,()->text("delivery.delete_added"),()->removeExtra(key,false,revision,slot)));
         supplyChooser.addWidget(line(66,214,200,28,()->text(key.equals(lastRemovedExtra)&&extraDelivery.stream().noneMatch(v->v.what().equals(key))?"delivery.removed_sync":"delivery.scope_hint"),NATIVE_PANEL_TEXT));
         supplyChooser.setVisible(true).setActive(true);
@@ -725,8 +843,49 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         supplyChooser.addWidget(button(66,110,200,20,()->text(key.equals(selectedPrimary)?"output.is_primary":"output.make_primary"),()->{
             send(SET_OUTPUT_PRIMARY,b->{b.writeVarLong(revision);b.writeVarInt(slot);b.writeUtf(selectedId);writeSample(b,key);});closeSupplyChooser();
         }));
+        supplyChooser.addWidget(button(66,138,200,20,()->text("multipliers.summary",batchMultiplier,outputMultiplier),this::openMultiplier));
         if(extraOutputs.stream().anyMatch(v->v.what().equals(key)))supplyChooser.addWidget(button(66,166,200,20,()->text("output.delete_added"),()->removeExtra(key,true,revision,slot)));
         supplyChooser.addWidget(line(66,202,200,40,()->text(key.equals(lastRemovedExtra)&&extraOutputs.stream().noneMatch(v->v.what().equals(key))?"delivery.removed_sync":"output.scope_hint"),NATIVE_PANEL_TEXT));
+        supplyChooser.setVisible(true).setActive(true);
+    }
+    private void openMultiplier() {
+        activeDeliveryKey = null;
+        long revision = patternRevision;
+        int slot = universalSlot;
+        String family = universalFamily;
+        String[] factor = {Integer.toString(outputMultiplier)};
+        String[] batch = {Integer.toString(batchMultiplier)};
+        String[] feedback = {""};
+        supplyChooser.clearAllWidgets();
+        int height = compact ? 294 : 268;
+        supplyChooser.setSizeHeight(height);
+        supplyChooser.addWidget(new ButtonWidget(0,0,332,height,new ColorRectTexture(0x88000000),click -> {
+            if (click.isRemote) closeSupplyChooser();
+        }));
+        supplyChooser.addWidget(new ButtonWidget(42,30,248,206,GuiTextures.BACKGROUND,click -> {}));
+        supplyChooser.addWidget(line(54,42,194,16,() -> text("multipliers.title"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(button(260,40,18,18,() -> "X",this::closeSupplyChooser));
+        supplyChooser.addWidget(line(54,70,135,18,() -> text("multipliers.batch"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(new TextFieldWidget(195,70,81,18,() -> batch[0],value -> batch[0]=value)
+                .setMaxStringLength(10));
+        supplyChooser.addWidget(line(54,92,222,14,() -> text("multipliers.batch_hint"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(line(54,118,135,18,() -> text("multipliers.yield"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(new TextFieldWidget(195,118,81,18,() -> factor[0],value -> factor[0]=value)
+                .setMaxStringLength(10));
+        supplyChooser.addWidget(line(54,140,222,14,() -> text("multipliers.yield_hint"),NATIVE_PANEL_TEXT));
+        supplyChooser.addWidget(button(54,166,222,20,() -> text("delivery.set"),() -> {
+            try {
+                int parsed = Integer.parseInt(factor[0].strip());
+                int batches = Integer.parseInt(batch[0].strip());
+                if (parsed < 1 || batches < 1 || family.isEmpty()) throw new IllegalArgumentException();
+                send(SET_MULTIPLIERS,b -> {
+                    b.writeVarLong(revision); b.writeVarInt(slot); b.writeUtf(family,512);
+                    b.writeVarInt(parsed); b.writeVarInt(batches);
+                });
+                closeSupplyChooser();
+            } catch (IllegalArgumentException invalid) { feedback[0] = text("output.multiplier_invalid"); }
+        }));
+        supplyChooser.addWidget(line(54,198,222,20,() -> feedback[0],NATIVE_PANEL_TEXT));
         supplyChooser.setVisible(true).setActive(true);
     }
     private void removeExtra(AEKey key,boolean output,long revision,int slot){
@@ -895,16 +1054,68 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     }
 
     public boolean hasModalOpen() {
-        return page == Page.UNIVERSAL && (ruleEditor.isVisible() || universalOptions.isVisible() || supplyChooser.isVisible());
+        return page == Page.UNIVERSAL && (inputChooser.isVisible() || ruleEditor.isVisible() || universalOptions.isVisible() || supplyChooser.isVisible());
+    }
+
+    @Override
+    public void updateScreen() {
+        super.updateScreen();
+        if (familyField == null) return;
+        familyPlaceholder.setVisible(browsingFamily && familyQuery.isEmpty() && !familyField.isFocus());
+        if (browsingFamily && familyQueryDelay > 0 && --familyQueryDelay == 0) {
+            String query = familyQuery.strip();
+            var matched = new BitSet(familyLabels.size());
+            if (!query.isEmpty()) {
+                for (int i = 0; i < familyLabels.size(); i++)
+                    if (matchesLocalizedName(familyLabels.get(i).getString(),query)) matched.set(i);
+            }
+            send(FAMILY_QUERY, buffer -> {
+                buffer.writeVarInt(universalSlot);
+                buffer.writeVarInt(familyIndexVersion);
+                buffer.writeUtf(query,96);
+                buffer.writeLongArray(matched.toLongArray());
+            });
+        }
+    }
+
+    private void prepareFamilySearch(List<RecipePattern> recipes) {
+        String family = draft().family();
+        long generation = org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternHelper.getReloadGeneration();
+        if (family.equals(indexedFamily) && generation == indexedGeneration && recipes.equals(indexedRecipes)) return;
+        familyIndex = new FamilyRecipeSearch();
+        for (var recipe : recipes) {
+            var candidate = machine.candidateForFamily(recipe.id(),family);
+            if (candidate == null) continue;
+            var labels = new ArrayList<Component>();
+            var ids = new ArrayList<String>();
+            labels.add(candidate.materialName());
+            ids.add(candidate.materialId().toString());
+            var route = routeDescription(recipe);
+            if (!route.getSiblings().isEmpty()) labels.add(route);
+            for (var output : recipe.pattern().getOutputs()) {
+                labels.add(output.what().getDisplayName());
+                ids.add(output.what().getId().toString());
+            }
+            familyIndex.add(recipe.id(),labels,ids);
+        }
+        indexedFamily = family;
+        indexedGeneration = generation;
+        indexedRecipes = List.copyOf(recipes);
+        familyLabels = familyIndex.labels();
+        matchingFamilyLabels.clear();
+        familyIndexVersion++;
     }
 
     private void showFamily() {
         if (draft().family().isEmpty()) return;
         browsingFamily = true;
+        familyQuery = "";
+        matchingFamilyLabels.clear();
         serverRecipeSample = null;
         serverOutputSample = null;
         search = "";
         localizedMaterials = Set.of();
+        localizedTypes = Set.of();
         searchPage = 0;
         searchVisibility = draft().requiredInputs().isEmpty()?SearchVisibility.ON_FAMILY:SearchVisibility.ON_PATTERN;
         searchResetRevision++;
@@ -1015,7 +1226,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         inputChooser.addWidget(button(148, 4, 16, 12, () -> "X", () -> send(CLOSE_INPUT_OPTIONS, buffer -> {})));
         inputChooser.addWidget(inputOptionSlots);
         inputChooser.addWidget(line(4, 61, 162, 12, () -> inputChoice == null ? "" : inputChoice.getDisplayName().getString(), MUTED_COLOR));
-        inputChooser.addWidget(button(4, 76, 82, 12, () -> text("reset_input"), () -> sendInputChoice(selectedId, selectedInputId, null)));
+        inputChooser.addWidget(button(4, 76, 82, 12, () -> text(page == Page.UNIVERSAL ? "delivery.reset_choice" : "reset_input"), () -> sendInputChoice(selectedId, selectedInputId, null)));
         addPager(inputChooser, 92, 76, 72, () -> inputOptionPage, () -> pages(inputOptionCount, INPUT_OPTION_PAGE_SIZE),
                 delta -> send(INPUT_OPTIONS_PAGE, buffer -> {
                     buffer.writeUtf(selectedId, 1024);
@@ -1026,7 +1237,11 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     }
 
     private void sendInputChoice(String recipeId, String slotId, @Nullable AEKey choice) {
-        send(INPUT_CHOICE, buffer -> {
+        send(page == Page.UNIVERSAL ? CARD_ITEM_CHOICE : INPUT_CHOICE, buffer -> {
+            if (page == Page.UNIVERSAL) {
+                buffer.writeVarLong(patternRevision);
+                buffer.writeVarInt(universalSlot);
+            }
             buffer.writeUtf(recipeId, 1024);
             buffer.writeUtf(slotId, 64);
             buffer.writeBoolean(choice != null);
@@ -1209,6 +1424,12 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             buffer.writeUtf(search, MERecipePatternFilter.MAX_EXPRESSION_LENGTH);
             buffer.writeVarInt(materials.size());
             materials.forEach(buffer::writeVarInt);
+            var types = search.isBlank() || search.contains(":") || UniversalMaterialRules.isExpression(search)
+                    ? List.<ResourceLocation>of() : GTRegistries.RECIPE_TYPES.values().stream()
+                    .map(type -> type.registryName).filter(type -> matchesLocalizedName(
+                            UniversalPatternFamily.typeLabel(type).getString(), search)).limit(1024).toList();
+            buffer.writeVarInt(types.size());
+            types.forEach(buffer::writeResourceLocation);
         });
     }
 
@@ -1285,6 +1506,29 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 }
                 if(storeItemEdit(next,key,output))ruleFeedback=Component.translatable(PREFIX+"delivery.deleted");
             }
+            case SET_PERSONAL_SUPPLY -> {
+                int mode = buffer.readVarInt();
+                if (page != Page.UNIVERSAL || gui == null || !(gui.entityPlayer instanceof net.minecraft.server.level.ServerPlayer player)
+                        || mode < -1 || mode > 3) return;
+                UniversalPatternItem.setPersonalSupplyMode(player.getPersistentData(),mode);
+            }
+            case SET_CARD_DEFAULTS -> {
+                long revision=buffer.readVarLong(); int slot=buffer.readVarInt();
+                boolean keep=buffer.readBoolean(); int mode=buffer.readVarInt();
+                if (page!=Page.UNIVERSAL || slot!=universalSlot || !acceptsDraftRevision(revision) || mode < -1 || mode > 3) return;
+                storeDraft(draft().withDefaults(keep,mode));
+            }
+            case SET_MULTIPLIERS -> {
+                long revision = buffer.readVarLong();
+                int slot = buffer.readVarInt();
+                String family = buffer.readUtf(512);
+                int factor = buffer.readVarInt();
+                int batches = buffer.readVarInt();
+                if (page != Page.UNIVERSAL || slot != universalSlot || !acceptsDraftRevision(revision)
+                        || factor < 1 || batches < 1 || family.isEmpty() || !family.equals(draft().family())) return;
+                var next = draft().withMultipliers(factor,batches);
+                if (validMultipliers(next)) storeDraft(next);
+            }
             case SET_OUTPUT_PRIMARY -> {
                 long revision=buffer.readVarLong();int slot=buffer.readVarInt();String recipeId=buffer.readUtf(1024);AEKey key=readSample(buffer);
                 if(page!=Page.UNIVERSAL||slot!=universalSlot||!acceptsDraftRevision(revision)||!recipeId.equals(selectedId)||key==null)return;
@@ -1360,7 +1604,8 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             case RESET_DELIVERY -> {
                 long revision=buffer.readVarLong();int slot=buffer.readVarInt();
                 if(page!=Page.UNIVERSAL||slot!=universalSlot||!acceptsDraftRevision(revision))return;
-                storeDraft(draft().withDeliveryFrom(Selection.empty()));
+                var before = draft();
+                storeDraft(before.withDeliveryFrom(Selection.empty()).withDefaults(before.keepByproducts(),before.defaultSupplyMode()).withItemChoices(before.itemChoices()));
             }
             case SET_DELIVERY_IGNORE, SET_DELIVERY_EXTRA -> {
                 long revision=buffer.readVarLong();int slot=buffer.readVarInt();AEKey key=readSample(buffer);
@@ -1387,8 +1632,10 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 int state=reason(recipeId);
                 if(candidate==null || !(state>=0 && state<=7 && state!=3))return;
                 editDraft(selected?PatternEdit.ADD:PatternEdit.REMOVE,List.of(recipeId));
-                // Keep an unchecked material visible so it can be selected again in place.
-                searchVisibility=SearchVisibility.ON_FAMILY;
+                selectedId = recipeId;
+                selectedInputId = "";
+                focusToggledRecipe = recipeId;
+                if (!selected && searchVisibility==SearchVisibility.ON_PATTERN) searchVisibility=SearchVisibility.ON_FAMILY;
             }
             case TOGGLE_VARIANT_GROUPS -> {if(page!=Page.UNIVERSAL)return;groupVariants=!groupVariants;searchPage=0;}
             case REPLACE_FIXED_INPUT -> {
@@ -1420,7 +1667,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             case SET_CATALYST_MODE -> {
                 long revision=buffer.readVarLong();int slot=buffer.readVarInt();
                 String recipeId=buffer.readUtf(1024);AEKey key=readSample(buffer);int mode=buffer.readVarInt();
-                if(page!=Page.UNIVERSAL || slot!=universalSlot || !acceptsDraftRevision(revision) || key==null || mode<0 || mode>3)return;
+                if(page!=Page.UNIVERSAL || slot!=universalSlot || !acceptsDraftRevision(revision) || key==null || mode< -1 || mode>3)return;
                 var recipe=machine.getRecipePattern(recipeId);
                 if(recipe==null || !recipeId.equals(selectedId) || recipe.nonConsumedInputs().stream().flatMap(Collection::stream).noneMatch(key::equals))return;
                 try { storeDraft(draft().withCatalystMode(org.gtlcore.universalpatterns.integration.ae2.handler.CatalystSupply.identity(key),mode)); }
@@ -1429,7 +1676,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             case SET_CATALYST_GROUP -> {
                 long revision=buffer.readVarLong();int slot=buffer.readVarInt();
                 String recipeId=buffer.readUtf(1024);AEKey key=readSample(buffer);int mode=buffer.readVarInt();
-                if(page!=Page.UNIVERSAL || slot!=universalSlot || !acceptsDraftRevision(revision) || key==null || mode<0 || mode>3)return;
+                if(page!=Page.UNIVERSAL || slot!=universalSlot || !acceptsDraftRevision(revision) || key==null || mode< -1 || mode>3)return;
                 var recipe=machine.getRecipePattern(recipeId);
                 if(recipe==null || !recipeId.equals(selectedId) || recipe.nonConsumedInputs().stream().flatMap(Collection::stream).noneMatch(key::equals))return;
                 try { var before=draft();var source=machine.candidateForFamily(recipeId,before.family());
@@ -1440,6 +1687,17 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             case SHOW_FAMILY -> {
                 if (page != Page.UNIVERSAL) return;
                 showFamily();
+            }
+            case FAMILY_QUERY -> {
+                int slot = buffer.readVarInt();
+                int version = buffer.readVarInt();
+                String query = buffer.readUtf(96);
+                if (page != Page.UNIVERSAL || !browsingFamily || slot != universalSlot || familyIndex == null || version != familyIndexVersion) return;
+                matchingFamilyLabels = BitSet.valueOf(buffer.readLongArray(null, (familyLabels.size() + 63) / 64));
+                familyQuery = query;
+                searchPage = 0;
+                focusToggledRecipe = "";
+                selectedInputId = "";
             }
             case SEARCH -> {
                 browsingFamily = false;
@@ -1459,6 +1717,11 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                     }
                 }
                 localizedMaterials = ids;
+                int typeCount = buffer.readVarInt();
+                if (typeCount < 0 || typeCount > 1024) return;
+                var types = new HashSet<ResourceLocation>();
+                for (int i = 0; i < typeCount; i++) types.add(buffer.readResourceLocation());
+                localizedTypes = Set.copyOf(types);
                 if (page == Page.UNIVERSAL) searchVisibility = SearchVisibility.ALL;
                 searchPage = 0;
                 selectedId = "";
@@ -1488,9 +1751,33 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 RecipePattern pattern = machine.getRecipePattern(recipeId);
                 if ((page != Page.SEARCH && page != Page.UNIVERSAL) || !recipeId.equals(selectedId) || pattern == null) return;
                 InputSlot slot = machine.getInputSlot(pattern, slotId);
-                if (slot == null || slot.alternatives().size() <= 1) return;
+                if (slot == null || slot.alternatives().size() <= 1 || page == Page.UNIVERSAL && !ItemSubstitutions.selectable(slot)) return;
                 selectedInputId = slotId;
                 inputOptionPage = 0;
+            }
+            case CARD_ITEM_CHOICE -> {
+                long revision = buffer.readVarLong();
+                int cardSlot = buffer.readVarInt();
+                String recipeId = buffer.readUtf(1024);
+                String slotId = buffer.readUtf(64);
+                AEKey choice = readSample(buffer);
+                if (page != Page.UNIVERSAL || gui == null || !(gui.entityPlayer instanceof net.minecraft.server.level.ServerPlayer player)
+                        || cardSlot != universalSlot || !acceptsDraftRevision(revision) || !recipeId.equals(selectedId)
+                        || !slotId.equals(selectedInputId) || machine.candidateForFamily(recipeId,draft().family()) == null) return;
+                var recipe = machine.getRecipePattern(recipeId);
+                var slot = recipe == null ? null : machine.getInputSlot(recipe, slotId);
+                if (slot == null) return;
+                try {
+                    var next = draft().withItemChoices(ItemSubstitutions.change(draft().itemChoices(), slot, choice));
+                    var data = player.getPersistentData();
+                    var personal = ItemSubstitutions.change(UniversalPatternItem.personalItemChoices(data), slot, choice);
+                    if (storeDraft(next)) {
+                        UniversalPatternItem.savePersonalItemChoices(data, personal);
+                        selectedInputId = "";
+                    }
+                } catch (IllegalArgumentException invalid) {
+                    ruleFeedback = Component.translatable(PREFIX + "delivery.invalid");
+                }
             }
             case INPUT_CHOICE -> {
                 String recipeId = buffer.readUtf(1024);
@@ -1535,6 +1822,8 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 int slot = buffer.readVarInt();
                 if (page != Page.UNIVERSAL || slot < 0 || slot >= machine.universalPatternSlots()) return;
                 universalSlot = slot;
+                originals.remove(slot);
+                familyQuery = ""; matchingFamilyLabels.clear(); searchResetRevision++;
                 searchVisibility = org.gtlcore.universalpatterns.common.item.UniversalPatternItem.readDraft(machine.universalCardSnapshot(slot)).family().isEmpty() ? SearchVisibility.ALL : SearchVisibility.ON_FAMILY;
                 searchPage = 0;
                 selectedId = "";
@@ -1552,6 +1841,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                     if (reference != null) {
                         search = "";
                         localizedMaterials = Set.of();
+                        localizedTypes = Set.of();
                     }
                     searchPage = 0;
                     selectedId = "";
@@ -1644,6 +1934,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
     @Override
     public void writeInitialData(FriendlyByteBuf buffer) {
         super.writeInitialData(buffer);
+        sentFamilyIndexVersion = -1;
         if (page == Page.UNIVERSAL) {
             for (int slot = 0; slot < machine.universalPatternSlots(); slot++) {
                 if (machine.hasUniversalPattern(slot)) {
@@ -1696,6 +1987,18 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 boolean emptyQuery = page == Page.UNIVERSAL && !browsingFamily && search.isBlank() && serverRecipeSample == null && serverOutputSample == null;
                 boolean expression = page == Page.UNIVERSAL && UniversalMaterialRules.isExpression(search);
                 var matches = emptyQuery ? List.<RecipePattern>of() : browsingFamily ? machine.familyRecipes(draft().family()) : machine.searchRecipes(expression ? "" : search, localizedMaterials, page == Page.UNIVERSAL ? universalSlot : -1);
+                if (browsingFamily) {
+                    prepareFamilySearch(matches);
+                    if (!familyQuery.isBlank()) matches = matches.stream().filter(recipe ->
+                            familyIndex.matches(recipe.id(),familyQuery,matchingFamilyLabels)).toList();
+                }
+                if (!browsingFamily && !expression && !search.isBlank() && !localizedTypes.isEmpty()) {
+                    var combined = new LinkedHashMap<String,RecipePattern>();
+                    for (var match : matches) combined.put(match.id(),match);
+                    for (var recipe : machine.cachedRecipes())
+                        if (localizedTypes.contains(recipe.recipe().recipeType.registryName)) combined.putIfAbsent(recipe.id(),recipe);
+                    matches = List.copyOf(combined.values());
+                }
                 if (expression) {
                     var predicate = UniversalMaterialRules.compile(search, machine.getLevel());
                     matches = matches.stream().filter(pattern -> {
@@ -1719,7 +2022,13 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 variantGroupSizes.clear();
                 if(groupVariants){
                     var groups=new LinkedHashMap<String,List<RecipePattern>>();
-                    for(var recipe:searchResults){var candidate=draftCandidate(recipe.id());String group=candidate.family()+"|"+candidate.materialId()+"|"+org.gtlcore.universalpatterns.integration.ae2.handler.RecipeVariantGroups.key(recipe);groups.computeIfAbsent(group,k->new ArrayList<>()).add(recipe);}
+                    var overrides = draft().recipeOverrides();
+                    for (var recipe : searchResults) {
+                        var candidate = draftCandidate(recipe.id());
+                        var routed = machine.universalCandidate(recipe.id());
+                        String group = overrides.containsKey(recipe.id()) ? recipe.id() : (routed == null ? candidate.family() : routed.family())+"|"+candidate.materialId();
+                        groups.computeIfAbsent(group,k -> new ArrayList<>()).add(recipe);
+                    }
                     var representatives=new ArrayList<RecipePattern>();
                     for(var bucket:groups.values())for(var variants:org.gtlcore.universalpatterns.integration.ae2.handler.RecipeVariantGroups.groups(bucket)){
                         var representative=variants.stream().min(Comparator.comparingInt((RecipePattern r)->org.gtlcore.universalpatterns.integration.ae2.handler.ConsumedFluidFilter.matches(draft(),r)?0:1).thenComparingInt(r->reason(r.id())<=2?0:1).thenComparingInt(r->r.id().equals(selectedId)?0:1)).orElseThrow();
@@ -1729,6 +2038,12 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 }
             }
             searchCount = searchResults.size();
+            if (!focusToggledRecipe.isEmpty()) {
+                for (int i=0; i<searchResults.size(); i++) if (searchResults.get(i).id().equals(focusToggledRecipe)) {
+                    searchPage = i / resultPageSize(); break;
+                }
+                focusToggledRecipe = "";
+            }
             searchPage = clampPage(searchPage, searchCount, resultPageSize());
             if (searchResults.stream().noneMatch(pattern -> pattern.id().equals(selectedId))) {
                 selectedId = searchResults.isEmpty() ? "" : searchResults.get(searchPage * resultPageSize()).id();
@@ -1822,15 +2137,28 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             buffer.writeVarInt(universalSlot);
             buffer.writeVarInt(searchResetRevision);
             buffer.writeBoolean(browsingFamily);buffer.writeBoolean(groupVariants);
+            boolean sendLabels = browsingFamily && familyIndexVersion != sentFamilyIndexVersion;
+            buffer.writeBoolean(sendLabels);
+            if (sendLabels) {
+                buffer.writeVarInt(familyIndexVersion);
+                buffer.writeVarInt(familyLabels.size());
+                for (var label : familyLabels) buffer.writeComponent(label);
+                sentFamilyIndexVersion = familyIndexVersion;
+            }
             buffer.writeBoolean(machine.hasRecipeCatalog());
             buffer.writeVarInt(machine.hasUniversalPattern(universalSlot) ? (int) machine.cachedRecipes().stream()
-                    .filter(pattern -> reason(pattern.id()) <= 2).map(pattern -> draftCandidate(pattern.id()).materialId()).distinct().count() : -1);
+                    .filter(pattern -> reason(pattern.id()) <= 2).count() : -1);
             buffer.writeBoolean(!selection.equals(org.gtlcore.universalpatterns.common.item.UniversalPatternItem.read(originals.get(universalSlot))));
             buffer.writeUtf(selection.family(), 512);
             buffer.writeVarLong(machine.getConfigurationRevision());
             buffer.writeUtf(selection.allow(), MaterialExpression.MAX_LENGTH);
             buffer.writeUtf(selection.deny(), MaterialExpression.MAX_LENGTH);
             buffer.writeBoolean(selection.externalCatalysts());
+            buffer.writeVarInt(selection.outputMultiplier());
+            buffer.writeVarInt(selection.batchMultiplier());
+            buffer.writeBoolean(selection.keepByproducts());
+            buffer.writeVarInt(selection.defaultSupplyMode());
+            buffer.writeVarInt(gui == null ? -1 : UniversalPatternItem.personalSupplyMode(gui.entityPlayer.getPersistentData()));
             buffer.writeVarInt(outputSelection(selection).ignoredInputs().size());for(var value:outputSelection(selection).ignoredInputs())buffer.writeUtf(value,64);
             writeStacks(buffer,deliveryPreview(outputSelection(selection)));
             buffer.writeVarInt(outputSelection(selection).ignoredOutputs().size());for(var value:outputSelection(selection).ignoredOutputs())buffer.writeUtf(value,64);
@@ -1853,16 +2181,28 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         for (RecipePattern pattern : rows) {
             buffer.writeUtf(pattern.id());
             buffer.writeVarInt(machine.getRecipeStatus(pattern.id()));
+            GenericStack rowOutput = machine.getPreviewPattern(pattern).getPrimaryOutput();
             if (page == Page.UNIVERSAL) {
                 var candidate = draftCandidate(pattern.id());
                 int rowReason = reason(pattern.id());
                 buffer.writeBoolean(rowReason <= 2);
                 buffer.writeComponent(candidate.materialName());
+                buffer.writeComponent(routeDescription(pattern));
                 buffer.writeVarInt(rowReason);
                 if (rowReason == DIFFERENT_FAMILY_REASON) buffer.writeUtf(candidate.family());
                 buffer.writeVarInt(variantGroupSizes.getOrDefault(pattern.id(), 1));
+                var card = draft();
+                if (candidate.family().equals(card.family())) {
+                    try {
+                        var effective = card.forMaterial(candidate.materialId().toString());
+                        var products = DeliveryPolicy.outputs(effective,pattern,candidate.output(),machine.getLevel());
+                        if (!products.isEmpty()) rowOutput = products.getFirst();
+                    } catch (IllegalArgumentException | ArithmeticException invalid) {
+                        // Keep the registered product visible so this draft can be edited.
+                    }
+                }
             }
-            GenericStack.writeBuffer(machine.getPreviewPattern(pattern).getPrimaryOutput(), buffer);
+            GenericStack.writeBuffer(rowOutput, buffer);
         }
         RecipePattern selected = machine.getRecipePattern(selectedId);
         if (selected != null) {
@@ -1872,11 +2212,11 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 var candidate = draftCandidate(selectedId);
                 var card = draft();
                 int selectedReason = reason(selectedId);
-                buffer.writeBoolean(selectedReason <= 2);
                 buffer.writeBoolean(candidate != null && card.family().equals(candidate.family()));
                 buffer.writeBoolean(expandedCasting(card.family(), selectedId) != null);
+                var routed = machine.universalCandidate(selectedId);
+                buffer.writeBoolean(routed != null && card.family().equals(routed.baseFamily()) && editableStatus(machine.getRecipeStatus(selectedId)));
                 buffer.writeComponent(candidate == null ? Component.empty() : candidate.materialName());
-                buffer.writeVarInt(candidate == null ? 0 : card.excluded().contains(candidate.materialId()) ? 2 : card.materials().contains(candidate.materialId()) ? 1 : 0);
                 buffer.writeVarInt(selectedReason);
                 if (selectedReason == DIFFERENT_FAMILY_REASON) {
                     buffer.writeUtf(candidate == null ? selected.recipe().recipeType.registryName.toString() : candidate.family());
@@ -1886,18 +2226,28 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                         .filter(other -> other.materialId().equals(candidate.materialId())).count());
             }
             AEKey primary = machine.getPrimaryOutput(selected);
-            if(page==Page.UNIVERSAL){try{var override=org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.primary(outputSelection(draft()));if(override!=null)primary=override;}catch(IllegalArgumentException invalid){}}
+            if(page==Page.UNIVERSAL){
+                var candidate=draftCandidate(selectedId);
+                if(candidate!=null)primary=candidate.output();
+                try{
+                    var policy=outputSelection(draft());
+                    var override=DeliveryPolicy.primary(policy);
+                    if (override!=null && (Arrays.stream(selected.pattern().getOutputs()).anyMatch(s->s.what().equals(override)) ||
+                            outputPreview(policy).stream().anyMatch(s->s.what().equals(override)))) primary=override;
+                }catch(IllegalArgumentException invalid){}
+            }
             buffer.writeBoolean(primary != null);
             if (primary != null) GenericStack.writeBuffer(new GenericStack(primary, 1), buffer);
             IPatternDetails preview = page==Page.UNIVERSAL?selected.pattern():machine.getPreviewPattern(selected);
             List<AEItemKey> virtualInputs = page == Page.UNIVERSAL ? List.of() : machine.getVirtualInputKeys(selected);
             buffer.writeVarInt(selected.inputSlots().size() + virtualInputs.size());
             for (InputSlot slot : selected.inputSlots()) {
-                AEKey choice = machine.getInputChoice(selected, slot);
+                AEKey choice = page == Page.UNIVERSAL ? slot.defaultKey() : machine.getInputChoice(selected, slot);
                 buffer.writeUtf(slot.id(), 64);
                 GenericStack.writeBuffer(new GenericStack(choice, slot.amount()), buffer);
                 buffer.writeVarInt(slot.alternatives().size());
                 buffer.writeBoolean(!choice.equals(slot.defaultKey()));
+                if (page == Page.UNIVERSAL) writeSample(buffer, ItemSubstitutions.resolve(draft(), slot, choice));
             }
             for (AEItemKey virtual : virtualInputs) {
                 buffer.writeUtf("", 64);
@@ -1905,7 +2255,13 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                 buffer.writeVarInt(1);
                 buffer.writeBoolean(false);
             }
-            writeStacks(buffer, Arrays.asList(preview.getOutputs()));
+            List<GenericStack> outputView = Arrays.asList(preview.getOutputs());
+            if (page == Page.UNIVERSAL && draft().outputMultiplier() != 1 &&
+                    machine.candidateForFamily(selectedId,draft().family()) != null) {
+                try { outputView = RecipeYield.outputs(selected,draft().outputMultiplier(),machine.getLevel()); }
+                catch (IllegalArgumentException | ArithmeticException invalid) { outputView = List.of(); }
+            }
+            writeStacks(buffer, outputView);
             if (page == Page.UNIVERSAL) {
                 var catalysts=selected.nonConsumedInputs().stream().flatMap(Collection::stream).distinct().toList();
                 writeStacks(buffer,catalysts.stream().map(key->new GenericStack(key,1)).toList());
@@ -1921,7 +2277,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             buffer.writeVarInt(inputOptionCount);
             buffer.writeVarInt(inputOptionPage);
             GenericStack.writeBuffer(new GenericStack(slot.defaultKey(), 1), buffer);
-            GenericStack.writeBuffer(new GenericStack(machine.getInputChoice(selected, slot), 1), buffer);
+            GenericStack.writeBuffer(new GenericStack(page == Page.UNIVERSAL ? ItemSubstitutions.resolve(draft(), slot, slot.defaultKey()) : machine.getInputChoice(selected, slot), 1), buffer);
             writeStacks(buffer, page(slot.alternatives(), inputOptionPage, INPUT_OPTION_PAGE_SIZE).stream()
                     .map(key -> new GenericStack(key, 1)).toList());
         }
@@ -1970,6 +2326,20 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             universalSlot = buffer.readVarInt();
             int resetRevision = buffer.readVarInt();
             browsingFamily = buffer.readBoolean();groupVariants=buffer.readBoolean();
+            if (buffer.readBoolean()) {
+                familyIndexVersion = buffer.readVarInt();
+                int count = buffer.readVarInt();
+                var labels = new ArrayList<Component>(count);
+                for (int i = 0; i < count; i++) labels.add(buffer.readComponent());
+                familyLabels = List.copyOf(labels);
+                if (!familyQuery.isEmpty()) familyQueryDelay = 1;
+            }
+            familyField.setVisible(browsingFamily).setActive(browsingFamily);
+            if (!browsingFamily || receivedSearchResetRevision != resetRevision) {
+                familyQuery = "";
+                familyField.setCurrentString("");
+                familyQueryDelay = 0;
+            }
             if (receivedSearchResetRevision != resetRevision) {
                 receivedSearchResetRevision = resetRevision;
                 recipeSample.display(null); outputSample.display(null);
@@ -1986,6 +2356,11 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             savedAllow = buffer.readUtf(MaterialExpression.MAX_LENGTH);
             savedDeny = buffer.readUtf(MaterialExpression.MAX_LENGTH);
             externalCatalysts = buffer.readBoolean();
+            outputMultiplier = buffer.readVarInt();
+            batchMultiplier = buffer.readVarInt();
+            keepByproducts = buffer.readBoolean();
+            defaultSupplyMode = buffer.readVarInt();
+            personalSupplyMode = buffer.readVarInt();
             var ignored=new HashSet<String>();int ignoredCount=buffer.readVarInt();for(int i=0;i<ignoredCount;i++)ignored.add(buffer.readUtf(64));ignoredDelivery=Set.copyOf(ignored);extraDelivery=readStacks(buffer);
             var ignoredOut=new HashSet<String>();int outputCount=buffer.readVarInt();for(int i=0;i<outputCount;i++)ignoredOut.add(buffer.readUtf(64));ignoredOutputs=Set.copyOf(ignoredOut);extraOutputs=readStacks(buffer);
             requiredFluid=buffer.readUtf(64);
@@ -2012,6 +2387,7 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             int status = buffer.readVarInt();
             boolean included = page == Page.UNIVERSAL && buffer.readBoolean();
             Component materialName = page == Page.UNIVERSAL ? buffer.readComponent() : null;
+            Component route = page == Page.UNIVERSAL ? buffer.readComponent() : Component.empty();
             int rowReason = page == Page.UNIVERSAL ? buffer.readVarInt() : 0;
             boolean differentFamily = rowReason == DIFFERENT_FAMILY_REASON;
             String rowFamily = differentFamily ? buffer.readUtf() : "";
@@ -2031,18 +2407,21 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
                     click -> {
                         if (click.isRemote) send(SELECT, packet -> packet.writeUtf(id, 1024));
                     }).setHoverTexture(page == Page.UNIVERSAL ? new ColorRectTexture(0xFFC8D8D2) : RecipePatternUiTextures.ROW_HOVER)
-                    .setHoverTooltips(Component.literal(id), rowTooltip);
+                    .setHoverTooltips(Component.literal(id), rowTooltip, route);
             recipeRows.addWidget(entry);
             recipeRows.addWidget(new ImageWidget(0, y, 2, 27, new ColorRectTexture((page == Page.UNIVERSAL ? included : status == 0) ? RecipePatternUiTextures.COUNTER_PUBLISHED_COLOR : RecipePatternUiTextures.COUNTER_ERROR_COLOR)));
             recipeRows.addWidget(stackWidget(stack, 4, y + 4, page == Page.UNIVERSAL ? GuiTextures.SLOT : RecipePatternUiTextures.SLOT));
             recipeRows.addWidget(line(26, y + 2, page==Page.UNIVERSAL?86:106, 12,
-                    () -> materialName == null ? stack.what().getDisplayName().getString() : materialName.getString(), TEXT_COLOR));
+                    () -> materialName == null ? stack.what().getDisplayName().getString() : materialName.getString() + (route.getString().isEmpty() ? "" : " · " + route.getString()), TEXT_COLOR));
             recipeRows.addWidget(line(26, y + 15, page == Page.UNIVERSAL ? 86 : 106, 10,
                     () -> rowSubtitle, page == Page.UNIVERSAL ? 0xFF414A4E : MUTED_COLOR));
             if(page==Page.UNIVERSAL){
                 final long revision=patternRevision;final int cardSlot=universalSlot;
                 boolean editable = rowReason >= 0 && rowReason <= 7 && !differentFamily;
-                var checkbox=button(116,y+5,16,16,()->included?"":"X",()->send(SET_MATERIAL_SELECTED,packet->{packet.writeVarLong(revision);packet.writeVarInt(cardSlot);packet.writeUtf(id,1024);packet.writeBoolean(!included);}));
+                var icon = included ? com.lowdragmc.lowdraglib.gui.editor.Icons.CHECKBOX_MARKED : com.lowdragmc.lowdraglib.gui.editor.Icons.CHECKBOX_BLANK;
+                var checkbox=new ButtonWidget(116,y+5,16,16,new GuiTextureGroup(new ColorRectTexture(included ? 0xFF266845 : 0xFF505A60),icon),click->{
+                    if (click.isRemote) send(SET_MATERIAL_SELECTED,packet->{packet.writeVarLong(revision);packet.writeVarInt(cardSlot);packet.writeUtf(id,1024);packet.writeBoolean(!included);});
+                });
                 checkbox.setActive(editable);checkbox.setHoverTooltips(Component.translatable(PREFIX+(editable?(included?"material_uncheck":"material_check"):"material_locked")));
                 recipeRows.addWidget(checkbox);
             }
@@ -2053,11 +2432,10 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             selectedStatus = buffer.readVarInt();
             selectedWhitelisted = buffer.readBoolean();
             if (page == Page.UNIVERSAL) {
-                selectedOnPattern = buffer.readBoolean();
                 selectedInFamily = buffer.readBoolean();
                 canExpandCasting = buffer.readBoolean();
+                canNarrowRoute = buffer.readBoolean();
                 selectedMaterial = buffer.readComponent();
-                selectedMaterialState = buffer.readVarInt();
                 int selectedReason = buffer.readVarInt();
                 selectedReasonLabel = selectedReason == DIFFERENT_FAMILY_REASON ?
                         recipeProcessLabel(buffer.readUtf()) : text("reason." + selectedReason);
@@ -2067,13 +2445,20 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             int inputCount = buffer.readVarInt();
             List<InputView> inputs = new ArrayList<>(inputCount);
             for (int index = 0; index < inputCount; index++) {
-                inputs.add(new InputView(buffer.readUtf(64), GenericStack.readBuffer(buffer), buffer.readVarInt(), buffer.readBoolean()));
+                String id = buffer.readUtf(64);
+                GenericStack stack = GenericStack.readBuffer(buffer);
+                int count = buffer.readVarInt();
+                boolean customised = buffer.readBoolean();
+                inputs.add(new InputView(id,stack,count,customised,page == Page.UNIVERSAL ? readSample(buffer) : stack.what()));
             }
             selectedInputViews = inputs;
             selectedInputs = inputs.stream().map(InputView::stack).toList();
-            if(page==Page.UNIVERSAL){var editable=new LinkedHashMap<AEKey,GenericStack>();for(var stack:selectedInputs)editable.put(stack.what(),stack);for(var stack:extraDelivery){var old=editable.get(stack.what());try{editable.put(stack.what(),old==null?stack:new GenericStack(stack.what(),Math.addExact(old.amount(),stack.amount())));}catch(ArithmeticException invalid){editable.putIfAbsent(stack.what(),stack);}}selectedInputs=List.copyOf(editable.values());}
             selectedOutputs = readStacks(buffer);
-            if(page==Page.UNIVERSAL){var editable=new LinkedHashMap<AEKey,GenericStack>();for(var stack:selectedOutputs)editable.put(stack.what(),stack);for(var stack:extraOutputs){var old=editable.get(stack.what());try{editable.put(stack.what(),old==null?stack:new GenericStack(stack.what(),Math.addExact(old.amount(),stack.amount())));}catch(ArithmeticException invalid){editable.putIfAbsent(stack.what(),stack);}}selectedOutputs=List.copyOf(editable.values());}
+            if (page == Page.UNIVERSAL) {
+                int batches = selectedInFamily ? batchMultiplier : 1;
+                selectedInputs = editableStacks(selectedInputs, extraDelivery, batches);
+                selectedOutputs = editableStacks(selectedOutputs, extraOutputs, batches);
+            }
             if (page == Page.UNIVERSAL) {
                 selectedCatalysts = readStacks(buffer);
                 var modes=new ArrayList<Integer>();for(int i=0;i<selectedCatalysts.size();i++)modes.add(buffer.readVarInt());
@@ -2083,9 +2468,9 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         } else {
             selectedStatus = 0;
             selectedWhitelisted = false;
-            selectedOnPattern = false;
             selectedInFamily = false;
             canExpandCasting = false;
+            canNarrowRoute = false;
             selectedPrimary = null;
             selectedInputs = List.of();
             selectedInputViews = List.of();
@@ -2182,6 +2567,16 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         return UniversalAttributeEditor.processLabel(separator < 0 ? family : family.substring(0, separator));
     }
 
+    private static Component routeDescription(RecipePattern recipe) {
+        var result = Component.empty();
+        if (recipe.circuit() >= 0) result.append(Component.translatable("gtlcore.universal_pattern.route_circuit", recipe.circuit()));
+        for (var fluid : org.gtlcore.universalpatterns.integration.ae2.handler.ConsumedFluidFilter.fluids(recipe)) {
+            if (!result.getSiblings().isEmpty()) result.append(" + ");
+            result.append(fluid.getDisplayName());
+        }
+        return result;
+    }
+
     private static String shortRecipeId(String id) {
         return id.substring(id.lastIndexOf('/') + 1);
     }
@@ -2190,6 +2585,20 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
         if (output) outputPage = movePage(outputPage, delta, selectedOutputs.size(), stackPageSize());
         else inputPage = movePage(inputPage, delta, selectedInputs.size(), stackPageSize());
         displayStacks();
+    }
+
+    /** Ignored ingredients stay visible for editing, with a strike through their icons. */
+    private List<GenericStack> editableStacks(List<GenericStack> base, List<GenericStack> extras, int batches) {
+        try {
+            return DeliveryPolicy.batchAmounts(base, extras, Set.of(), batches);
+        } catch (ArithmeticException invalid) {
+            // Keep the offending ingredient accessible so an oversized draft can be corrected.
+            draftMessage = text("output.multiplier_invalid");
+            var unscaled = new LinkedHashMap<AEKey, GenericStack>();
+            for (var stack : base) unscaled.put(stack.what(),stack);
+            for (var stack : extras) unscaled.putIfAbsent(stack.what(),stack);
+            return List.copyOf(unscaled.values());
+        }
     }
 
     private void displayStacks() {
@@ -2206,12 +2615,19 @@ public class RecipePatternBrowserWidget extends WidgetGroup {
             GenericStack stack = stacks.get(index);
             int x = (index % 9) * 18;
             int y = (index / 9) * 18;
-            group.addWidget(stackWidget(stack, x, y, page == Page.UNIVERSAL ? GuiTextures.SLOT : RecipePatternUiTextures.SLOT));
+            GenericStack icon = stack;
+            if (page == Page.UNIVERSAL && !output && extraDelivery.stream().noneMatch(extra -> extra.what().equals(stack.what()))) {
+                var replacements = selectedInputViews.stream().filter(input -> input.stack().what().equals(stack.what()))
+                        .map(InputView::deliveryKey).distinct().toList();
+                if (replacements.size() == 1) icon = new GenericStack(replacements.getFirst(),stack.amount());
+            }
+            group.addWidget(stackWidget(icon, x, y, page == Page.UNIVERSAL ? GuiTextures.SLOT : RecipePatternUiTextures.SLOT));
             if (page == Page.UNIVERSAL) {
-                if(output?outputIgnored(stack.what()):deliveryIgnored(stack.what()))group.addWidget(new ImageWidget(x,y+8,18,2,new ColorRectTexture(0xFFC54C4C)));
+                if(output ? outputIgnored(stack.what()) || selectedInFamily && !keepByproducts && !stack.what().equals(selectedPrimary) : deliveryIgnored(stack.what()))
+                    group.addWidget(new ImageWidget(x,y+8,18,2,new ColorRectTexture(0xFFC54C4C)));
                 group.addWidget(new ButtonWidget(x,y,18,18,IGuiTexture.EMPTY,click->{
                     if(click.isRemote){if(output)openOutputDelivery(stack);else openInputDelivery(stack);}
-                }).setHoverTooltips(stack.what().getDisplayName(),Component.translatable(PREFIX+(output?"output.title":"delivery.title"))));
+                }).setHoverTooltips(icon.what().getDisplayName(),Component.literal(icon.what().getId().toString()),Component.translatable(PREFIX+(output?"output.title":"delivery.title"))));
                 continue;
             }
             if (!output) {

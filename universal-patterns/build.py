@@ -51,7 +51,7 @@ with zipfile.ZipFile(mapped) as z:
     changes = {n:z.read(n) for n in z.namelist() if n.endswith('.class')}
 for p in (module/'src/main/resources').rglob('*'):
     if p.is_file(): changes[p.relative_to(module/'src/main/resources').as_posix()] = p.read_bytes()
-out = Path(os.environ.get('GTL_UNIVERSAL_PATTERNS_OUTPUT', ROOT/'dist/universal-recipe-patterns-1.0.32.jar'))
+out = Path(os.environ.get('GTL_UNIVERSAL_PATTERNS_OUTPUT', ROOT/'dist/universal-recipe-patterns-1.0.36.jar'))
 out.parent.mkdir(parents=True, exist_ok=True)
 staged = work/f'{classes.name}-release.jar'
 locales = json.loads((module/'locales.json').read_text(encoding='utf-8'))

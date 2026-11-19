@@ -71,7 +71,10 @@ public abstract class UniversalWildcardRuntimeMixin extends MEPatternBufferPartM
         if (!(wildcardPatternSlot.getStackInSlot(0).getItem() instanceof UniversalPatternItem)) return true;
         if (slot < 0 || slot >= expandedPatterns.size()) return false;
         var tag = expandedPatterns.get(slot).getDefinition().getReadOnlyStack().getTag();
-        return tag != null && tag.getString("gtlcoreRecipe").equals(recipe.recipeType.registryName + "/" + recipe.id);
+        if (tag == null || !tag.getString("gtlcoreRecipe").equals(recipe.recipeType.registryName + "/" + recipe.id)) return false;
+        var held = internalSlots.get(slot);
+        return org.gtlcore.universalpatterns.integration.ae2.handler.DirectCatalystSupply.checkCircuit(expandedPatterns.get(slot),
+                held.getItemInventory(),held.getCacheManager()::setCircuitCache,held.getCacheManager()::clearCircuitCache);
     }
     @Override public void attachSideTabs(TabsWidget tabs) {
         super.attachSideTabs(tabs);

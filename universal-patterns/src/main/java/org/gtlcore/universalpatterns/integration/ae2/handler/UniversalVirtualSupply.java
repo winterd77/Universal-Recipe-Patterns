@@ -56,6 +56,8 @@ public final class UniversalVirtualSupply {
             var encoded=PatternDetailsHelper.encodeProcessingPattern(inputs.toArray(GenericStack[]::new),processing.getSparseOutputs());
             encoded.getOrCreateTag().putString("gtlcoreRecipe",recipe.id());
             encoded.getOrCreateTag().putInt("gtlcoreRecipeCircuit",recipe.circuit());
+            if (tag.contains(DirectCatalystSupply.DIRECT_CIRCUIT))
+                encoded.getOrCreateTag().putInt(DirectCatalystSupply.DIRECT_CIRCUIT,tag.getInt(DirectCatalystSupply.DIRECT_CIRCUIT));
             var decoded=PatternDetailsHelper.decodePattern(encoded,level);
             if(decoded!=null)result.add(decoded);
         }

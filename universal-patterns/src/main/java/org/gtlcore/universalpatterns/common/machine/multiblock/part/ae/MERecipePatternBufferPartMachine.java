@@ -21,6 +21,7 @@ import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternHelper.InputSl
 import org.gtlcore.gtlcore.integration.ae2.handler.MERecipePatternHelper.RecipePattern;
 import org.gtlcore.universalpatterns.integration.ae2.handler.UniversalPatternFamily;
 import org.gtlcore.universalpatterns.integration.ae2.handler.RegisteredProcessFamilies;
+import org.gtlcore.universalpatterns.integration.ae2.handler.RecipeRoute;
 import org.gtlcore.universalpatterns.integration.ae2.handler.UniversalPatternFamily.Candidate;
 import org.gtlcore.universalpatterns.integration.ae2.handler.UniversalMaterialRules;
 
@@ -97,7 +98,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
     private final Map<String, IPatternDetails> previewPatterns = new HashMap<>();
     private final Set<String> invalidPatterns = new HashSet<>();
     // Bounded by the current recipe catalog; never persisted and cleared on reload.
-    private record PreviewKey(IPatternDetails original, AEKey primary, Map<String,AEKey> inputs, List<AEItemKey> virtual) {}
+    private record PreviewKey(IPatternDetails original, AEKey primary, Map<String,AEKey> inputs, List<AEItemKey> virtual, Selection policy) {}
     private record PreviewEntry(PreviewKey key, IPatternDetails pattern) {}
     private record ProcessedEntry(IPatternDetails preview, boolean byproducts, IPatternDetails pattern) {}
     private record FamilyEntry(AEKey output, boolean explicit, Candidate legacy, Candidate preferred) {}
@@ -279,7 +280,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
         for (int index = 0; index < recipePatterns.size(); index++) {
             RecipePattern recipePattern = recipePatterns.get(index);
             var previewKey = new PreviewKey(recipePattern.pattern(),getPrimaryOutput(recipePattern),
-                    Map.copyOf(inputOverrides.getOrDefault(recipePattern.id(),Map.of())),List.copyOf(effectiveVirtualInputs(recipePattern.id())));
+                    Map.copyOf(inputOverrides.getOrDefault(recipePattern.id(),Map.of())),List.copyOf(effectiveVirtualInputs(recipePattern.id())), catalystPolicies.get(recipePattern.id()));
             var cachedPreview=previewCache.get(recipePattern.id());
             IPatternDetails preview = cachedPreview!=null && cachedPreview.key().equals(previewKey) ? cachedPreview.pattern() : buildPreviewPattern(recipePattern);
             previewCache.put(recipePattern.id(),new PreviewEntry(previewKey,preview));
@@ -296,7 +297,9 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
                 continue;
             }
             ItemStack complete = preview.getDefinition().toStack();
-            IPatternDetails processed = realPatternHelper.processPatternWithCircuit(complete, circuit -> {}, getLevel(), keepByProduct);
+            // Card previews already carry the exact supply and output policy, including physical circuits.
+            IPatternDetails processed = catalystPolicies.containsKey(recipePattern.id()) ? preview :
+                    realPatternHelper.processPatternWithCircuit(complete, circuit -> {}, getLevel(), keepByProduct);
             if (processed == null) {
                 processedCache.put(recipePattern.id(),new ProcessedEntry(preview,keepByProduct,null));
                 invalidPatterns.add(recipePattern.id());
@@ -305,7 +308,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
             ItemStack encoded = processed.getDefinition().toStack();
             // MEBufferPatternHelper rebuilds the ordinary AE2 IO; retain the generated recipe's unique binding.
             encoded.getOrCreateTag().putString("gtlcoreRecipe", complete.getOrCreateTag().getString("gtlcoreRecipe"));
-            encoded.getOrCreateTag().putInt("gtlcoreRecipeCircuit", recipePattern.circuit());
+            encoded.getOrCreateTag().putInt("gtlcoreRecipeCircuit", effectiveCircuit(recipePattern));
             IPatternDetails pattern = PatternDetailsHelper.decodePattern(encoded, getLevel());
             processedCache.put(recipePattern.id(),new ProcessedEntry(preview,keepByProduct,pattern));
             if (pattern != null) {
@@ -335,11 +338,8 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
             var output = override == null ? pattern.primaryOutput() : override;
             var family=familyCache.get(pattern.id());
             if(family==null || !Objects.equals(family.output(),output) || family.explicit()!=(override!=null)){
-                Candidate legacy = UniversalPatternFamily.describe(pattern, output);
-                if (legacy == null) legacy = UniversalPatternFamily.describePetrochemical(pattern, output, getLevel());
-                Candidate candidate = RegisteredProcessFamilies.describe(pattern, output, override == null);
-                if (candidate == null || candidate.family().length() > 512) candidate = legacy;
-                family=new FamilyEntry(output,override!=null,legacy,candidate);familyCache.put(pattern.id(),family);
+                var families=RecipeRoute.describe(pattern,output,override==null,getLevel());
+                family=new FamilyEntry(output,override!=null,families.legacy(),families.preferred());familyCache.put(pattern.id(),family);
             }
             Candidate legacy=family.legacy(), candidate=family.preferred();
             if (candidate != legacy && legacy != null && installedFamilies.contains(legacy.family())) {
@@ -367,12 +367,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
             Candidate candidate = candidateForFamily(recipeId, selection.family());
             if (candidate == null || !org.gtlcore.universalpatterns.integration.ae2.handler.ConsumedFluidFilter.matches(selection,getRecipePattern(recipeId))) return;
             var id = candidate.materialId();
-            Boolean override=selection.recipeOverrides().get(recipeId);
-            if(Boolean.FALSE.equals(override))return;
-            if (override==null&&(selection.excluded().contains(id) || deny.test(candidate))) return;
-            String chosen = selection.recipes().get(id);
-            if (override==null&&chosen != null && !chosen.equals(recipeId)) return;
-            if (Boolean.TRUE.equals(override)||selection.materials().contains(id) || allow.test(candidate)) {
+            if (selection.recipeReason(recipeId, id, () -> allow.test(candidate), () -> deny.test(candidate)) <= 2) {
                 materials.add(id);
                 catalystPolicies.putIfAbsent(recipeId,selection);
                 if (candidate == preferred) publishedUniversalRecipes.put(recipeId, candidate);
@@ -583,7 +578,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
     private @Nullable IPatternDetails buildPreviewPattern(RecipePattern recipePattern) {
         IPatternDetails original = recipePattern.pattern();
         var delivery=catalystPolicies.get(recipePattern.id());
-        if(delivery!=null){var bound=candidateForFamily(recipePattern.id(),delivery.family());if(bound!=null)delivery=delivery.forMaterial(bound.materialId().toString());original=org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.apply(delivery,original,getLevel());if(original==null)return null;}
+        if(delivery!=null){var bound=candidateForFamily(recipePattern.id(),delivery.family());if(bound!=null)delivery=delivery.forMaterial(bound.materialId().toString());original=org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.apply(delivery,recipePattern,getPrimaryOutput(recipePattern),getLevel());if(original==null)return null;}
         if(delivery!=null){original=org.gtlcore.universalpatterns.integration.ae2.handler.DirectCatalystSupply.apply(delivery,recipePattern,original,getLevel());if(original==null)return null;}
         AEKey primary = getPrimaryOutput(recipePattern);
         if(delivery!=null&&!delivery.primaryOutputs().isEmpty())primary=org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.primary(delivery);
@@ -598,12 +593,14 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
         // One token grants unlimited matching supply for its non-consumed payload, independently of recipe quantity.
         for (AEItemKey token : virtualInputs) inputs.add(new GenericStack(token, 1));
         try {
-            Map<AEKey, Long> configuredInputs = new LinkedHashMap<>();
-            for (InputSlot slot : recipePattern.inputSlots()) {
-                configuredInputs.merge(getInputChoice(recipePattern, slot), slot.amount(), Math::addExact);
+            if (delivery != null) {
+                inputs.addAll(org.gtlcore.universalpatterns.integration.ae2.handler.ItemSubstitutions.inputs(
+                        delivery, recipePattern, slot -> getInputChoice(recipePattern, slot)));
+            } else {
+                var consumed = recipePattern.inputSlots().stream()
+                        .map(slot -> new GenericStack(getInputChoice(recipePattern, slot), slot.amount())).toList();
+                inputs.addAll(org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.batchAmounts(consumed, List.of(), Set.of(), 1));
             }
-            var consumed=configuredInputs.entrySet().stream().map(e->new GenericStack(e.getKey(),e.getValue())).toList();
-            inputs.addAll(delivery==null?consumed:org.gtlcore.universalpatterns.integration.ae2.handler.DeliveryPolicy.inputs(delivery,consumed));
             if(inputs.isEmpty())return null;
             ItemStack encoded = PatternDetailsHelper.encodeProcessingPattern(inputs.toArray(GenericStack[]::new), outputs.toArray(GenericStack[]::new));
             encoded.getOrCreateTag().putString("gtlcoreRecipe", recipePattern.id());
@@ -695,12 +692,7 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
     }
 
     public @Nullable Candidate candidateForFamily(String id, String family) {
-        Candidate preferred = universalCandidates.get(id);
-        if (preferred != null && preferred.family().equals(family)) return preferred;
-        Candidate casting = RegisteredProcessFamilies.legacyCasting(preferred, family);
-        if (casting != null) return casting;
-        Candidate legacy = legacyUniversalCandidates.get(id);
-        return legacy != null && legacy.family().equals(family) ? legacy : null;
+        return RecipeRoute.resolve(universalCandidates.get(id),legacyUniversalCandidates.get(id),family);
     }
 
     public int universalSelectedCount(int slot) {
@@ -787,24 +779,6 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
         universalPatternSlot.setStackInSlot(slot, stack);
         configurationChanged();
         return true;
-    }
-
-    /** Zero through two include a recipe. Other values explain its exclusion. */
-    public int universalReason(Selection selection, String recipeId) {
-        Candidate candidate = candidateForFamily(recipeId, selection.family());
-        if (candidate == null) return 3;
-        int status = getRecipeStatus(recipeId);
-        if (status != 0 && status != 7) return 9 + status;
-        if(!org.gtlcore.universalpatterns.integration.ae2.handler.ConsumedFluidFilter.matches(selection,getRecipePattern(recipeId)))return 8;
-        var material = candidate.materialId();
-        Boolean override=selection.recipeOverrides().get(recipeId);
-        if(override!=null)return override?1:4;
-        if (selection.excluded().contains(material)) return 4;
-        if (savedRule(selection.deny(), true).test(candidate)) return 5;
-        String chosen = selection.recipes().get(material);
-        if (chosen != null && !chosen.equals(recipeId)) return 6;
-        if (selection.materials().contains(material)) return 1;
-        return savedRule(selection.allow(), false).test(candidate) ? 0 : 7;
     }
 
     private void saveUniversalSelection(int slot, Selection selection) {
@@ -962,7 +936,11 @@ public class MERecipePatternBufferPartMachine extends MEPatternBufferPartMachine
     public boolean matchesRecipe(int slot, GTRecipe recipe) {
         if (!hasPatternInSlot(slot)) return false;
         GTRecipe expected = recipePatterns.get(slot).recipe();
-        return expected.recipeType == recipe.recipeType && Objects.equals(expected.id, recipe.id);
+        if (expected.recipeType != recipe.recipeType || !Objects.equals(expected.id, recipe.id)) return false;
+        var held = getInternalSlotOrNull(slot);
+        return held == null || org.gtlcore.universalpatterns.integration.ae2.handler.DirectCatalystSupply.checkCircuit(
+                previewPatterns.get(recipePatterns.get(slot).id()), held.getItemInventory(),
+                held.getCacheManager()::setCircuitCache, held.getCacheManager()::clearCircuitCache);
     }
 
     @Override

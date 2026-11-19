@@ -14,8 +14,14 @@ public final class CatalystSupply {
         try { return HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(key.toTag().toString().getBytes(StandardCharsets.UTF_8))); }
         catch(NoSuchAlgorithmException impossible){throw new IllegalStateException(impossible);}
     }
-    public static boolean external(Selection selection, AEKey key) { return selection.externalFor(identity(key)); }
-    public static int mode(Selection selection, AEKey key) { return selection.supplyMode(identity(key)); }
+    public static boolean external(Selection selection, AEKey key) { return mode(selection, key) != 0; }
+    public static int mode(Selection selection, AEKey key) {
+        var override = selection.catalystModes().get(identity(key));
+        if (override != null) return override;
+        if (selection.defaultSupplyMode() >= 0) return selection.defaultSupplyMode();
+        if (selection.externalCatalysts()) return 1;
+        return key instanceof AEItemKey item && IntCircuitBehaviour.isIntegratedCircuit(item.getReadOnlyStack()) ? 3 : 0;
+    }
     public static Map<AEKey,AEItemKey> filter(Selection selection,Map<AEKey,AEItemKey> supplies) {
         var result=new HashMap<AEKey,AEItemKey>();
         supplies.forEach((key,token)->{if(!external(selection,key))result.put(key,token);});

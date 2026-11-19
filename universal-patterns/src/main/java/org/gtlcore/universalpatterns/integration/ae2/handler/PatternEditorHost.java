@@ -22,7 +22,21 @@ public interface PatternEditorHost {
     boolean applyUniversalDraft(int slot, ItemStack original, Selection selection);
     Candidate universalCandidate(String id);
     Candidate candidateForFamily(String id, String family);
-    int universalReason(Selection selection, String id);
+    default int universalReason(Selection selection, String id) {
+        Candidate candidate = candidateForFamily(id, selection.family());
+        if (candidate == null) return 3;
+        int status = getRecipeStatus(id);
+        if (status != 0 && status != 7) return 9 + status;
+        if (!ConsumedFluidFilter.matches(selection, getRecipePattern(id))) return 8;
+        return selection.recipeReason(id, candidate.materialId(),
+                () -> ruleMatches(selection.allow(), candidate, false),
+                () -> ruleMatches(selection.deny(), candidate, true));
+    }
+
+    private boolean ruleMatches(String rule, Candidate candidate, boolean fallback) {
+        try { return UniversalMaterialRules.compile(rule, getLevel()).test(candidate); }
+        catch (IllegalArgumentException invalid) { return fallback; }
+    }
     default List<RecipePattern> familyRecipes(String family) { return searchRecipes("", Set.of()); }
     default boolean hasRecipeCatalog() { return true; }
     default List<RecipePattern> cachedRecipes() { return searchRecipes("", Set.of()); }

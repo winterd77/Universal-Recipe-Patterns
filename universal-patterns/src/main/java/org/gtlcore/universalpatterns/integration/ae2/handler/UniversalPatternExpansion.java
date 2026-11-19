@@ -23,6 +23,7 @@ public final class UniversalPatternExpansion {
         final Map<Selection, List<IPatternDetails>> selections = new LinkedHashMap<>();
         final Map<String, List<MERecipePatternHelper.RecipePattern>> types = new HashMap<>();
         final Map<String, MERecipePatternHelper.RecipePattern> byId = new HashMap<>();
+        final Map<String, RecipeRoute.Families> families = new HashMap<>();
     }
     public static List<IPatternDetails> expand(ItemStack stack, Level level) {
         if (level == null || !(stack.getItem() instanceof UniversalPatternItem)) return List.of();
@@ -54,21 +55,14 @@ public final class UniversalPatternExpansion {
             var deny = UniversalMaterialRules.compile(selection.deny(), level);
             for (var recipe : recipes) {
                 if(!ConsumedFluidFilter.matches(selection,recipe))continue;
-                var candidate = RegisteredProcessFamilies.describe(recipe, recipe.primaryOutput(), true);
-                if (candidate == null || !candidate.family().equals(selection.family())) {
-                    candidate = RegisteredProcessFamilies.legacyCasting(candidate, selection.family());
-                    if (candidate == null) candidate = UniversalPatternFamily.describe(recipe, recipe.primaryOutput());
-                    if (candidate == null) candidate = UniversalPatternFamily.describePetrochemical(recipe, recipe.primaryOutput(), level);
-                }
-                if (candidate == null || !candidate.family().equals(selection.family())) continue;
+                var families = cache.families.computeIfAbsent(recipe.id(), ignored ->
+                        RecipeRoute.describe(recipe,recipe.primaryOutput(),true,level));
+                var candidate = RecipeRoute.resolve(families.preferred(),families.legacy(),selection.family());
+                if (candidate == null) continue;
                 var id = candidate.materialId();
-                Boolean override=selection.recipeOverrides().get(recipe.id());
-                if(Boolean.FALSE.equals(override))continue;
-                if (override==null&&(selection.excluded().contains(id) || deny.test(candidate))) continue;
-                String chosen = selection.recipes().get(id);
-                if (override==null&&chosen != null && !chosen.equals(recipe.id())) continue;
-                if (Boolean.TRUE.equals(override)||selection.materials().contains(id) || allow.test(candidate)) {
-                    var delivered=DeliveryPolicy.apply(selection.forMaterial(id.toString()),recipe.pattern(),level);
+                var matched = candidate;
+                if (selection.recipeReason(recipe.id(), id, () -> allow.test(matched), () -> deny.test(matched)) <= 2) {
+                    var delivered=DeliveryPolicy.apply(selection.forMaterial(id.toString()),recipe,candidate.output(),level);
                     if(delivered!=null)delivered=DirectCatalystSupply.apply(selection,recipe,delivered,level);
                     if(delivered!=null)result.add(delivered);
                 }

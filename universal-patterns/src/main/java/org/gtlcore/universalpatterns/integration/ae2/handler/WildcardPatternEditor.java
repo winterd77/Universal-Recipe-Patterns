@@ -94,12 +94,9 @@ public final class WildcardPatternEditor implements PatternEditorHost {
             if(pattern==null)continue;
             recipePatterns.add(pattern);patternById.put(pattern.id(),pattern);
             searchMetadata.put(pattern.id(),MERecipePatternFilter.describe(recipe));
-            var legacy=UniversalPatternFamily.describe(pattern,pattern.primaryOutput());
-            if(legacy==null)legacy=UniversalPatternFamily.describePetrochemical(pattern,pattern.primaryOutput(),getLevel());
-            var preferred=RegisteredProcessFamilies.describe(pattern,pattern.primaryOutput(),true);
-            if(preferred==null || preferred.family().length()>512)preferred=legacy;
-            if(preferred!=null && preferred.family().length()<=512)universalCandidates.put(pattern.id(),preferred);
-            if(legacy!=null)legacyUniversalCandidates.put(pattern.id(),legacy);
+            var families=RecipeRoute.describe(pattern,pattern.primaryOutput(),true,getLevel());
+            if(families.preferred()!=null)universalCandidates.put(pattern.id(),families.preferred());
+            if(families.legacy()!=null)legacyUniversalCandidates.put(pattern.id(),families.legacy());
         }
     }
     @Override public boolean hasUniversalPattern(int slot) { return slot==0 && cards.getStackInSlot(0).getItem() instanceof UniversalPatternItem; }
@@ -189,34 +186,6 @@ public final class WildcardPatternEditor implements PatternEditorHost {
     }
 
     public @Nullable Candidate candidateForFamily(String id, String family) {
-        Candidate preferred = universalCandidates.get(id);
-        if (preferred != null && preferred.family().equals(family)) return preferred;
-        Candidate casting = RegisteredProcessFamilies.legacyCasting(preferred, family);
-        if (casting != null) return casting;
-        Candidate legacy = legacyUniversalCandidates.get(id);
-        return legacy != null && legacy.family().equals(family) ? legacy : null;
-    }
-
-    public int universalReason(Selection selection, String recipeId) {
-        Candidate candidate = candidateForFamily(recipeId, selection.family());
-        if (candidate == null) return 3;
-        int status = getRecipeStatus(recipeId);
-        if (status != 0 && status != 7) return 9 + status;
-        if(!ConsumedFluidFilter.matches(selection,getRecipePattern(recipeId)))return 8;
-        var material = candidate.materialId();
-        if (selection.excluded().contains(material)) return 4;
-        if (savedRule(selection.deny(), true).test(candidate)) return 5;
-        String chosen = selection.recipes().get(material);
-        if (chosen != null && !chosen.equals(recipeId)) return 6;
-        if (selection.materials().contains(material)) return 1;
-        return savedRule(selection.allow(), false).test(candidate) ? 0 : 7;
-    }
-
-    private Predicate<Candidate> savedRule(String rule, boolean denyOnInvalid) {
-        try {
-            return UniversalMaterialRules.compile(rule, getLevel());
-        } catch (IllegalArgumentException invalidAfterReload) {
-            return candidate -> denyOnInvalid;
-        }
+        return RecipeRoute.resolve(universalCandidates.get(id),legacyUniversalCandidates.get(id),family);
     }
 }

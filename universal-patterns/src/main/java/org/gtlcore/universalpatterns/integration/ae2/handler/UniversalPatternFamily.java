@@ -44,7 +44,11 @@ public final class UniversalPatternFamily {
     private UniversalPatternFamily() {}
 
     public record Candidate(String family, @Nullable Material material, List<AEKey> inputs, AEKey output,
-                            MERecipePatternHelper.RecipePattern recipe, @Nullable AEKey selector) {
+                            MERecipePatternHelper.RecipePattern recipe, @Nullable AEKey selector, String baseFamily) {
+        public Candidate(String family, @Nullable Material material, List<AEKey> inputs, AEKey output,
+                         MERecipePatternHelper.RecipePattern recipe, @Nullable AEKey selector) {
+            this(family, material, inputs, output, recipe, selector, family);
+        }
         Candidate(String family, @Nullable Material material, List<AEKey> inputs, AEKey output,
                   MERecipePatternHelper.RecipePattern recipe) {
             this(family, material, inputs, output, recipe, null);
@@ -276,11 +280,30 @@ public final class UniversalPatternFamily {
         return material == null ? null : formOf(key, material);
     }
 
+    public static Component typeLabel(ResourceLocation type) {
+        return Component.translatableWithFallback(type.getNamespace()+"."+type.getPath(),
+                Component.translatableWithFallback("gtceu."+type.getPath(), type.getPath()).getString());
+    }
+
     public static Component label(String family) {
         if (family.isEmpty()) return Component.translatable(PREFIX + "unset");
+        int route = family.lastIndexOf("|r:");
+        if (route >= 0) {
+            var base = label(family.substring(0, route));
+            String circuit = family.substring(route + 3).split(":", 2)[0];
+            return circuit.equals("-1") ? base : base.copy().append(" · ").append(Component.translatable(PREFIX + "route_circuit", circuit));
+        }
         String[] parts = family.split("\\|", -1);
         if (parts.length != 3) return Component.translatable(PREFIX + "unset");
         String inputs = parts[1];
+        if (inputs.startsWith("registered:")) {
+            var type = ResourceLocation.tryParse(parts[0]);
+            if (type == null) return Component.translatable(PREFIX + "unset");
+            var product = formLabel(parts[2]);
+            var roles = inputs.substring("registered:".length());
+            if (!roles.equals("components")) product = Component.translatable(PREFIX + "family", formLabels(roles), product);
+            return Component.translatable(PREFIX + "registered_family", typeLabel(type), product);
+        }
         String key = "family";
         if (inputs.startsWith("stage:")) {
             int split = inputs.indexOf(',');
@@ -336,6 +359,8 @@ public final class UniversalPatternFamily {
     private static Component formLabel(String form) {
         int separator = form.indexOf(':');
         String name = separator < 0 ? form : form.substring(separator + 1);
+        if (form.startsWith("tiered:") || form.startsWith("material_part:"))
+            return Component.translatableWithFallback(PREFIX + "part." + name, name.replace('_', ' '));
         if (form.startsWith("water:")) {
             return name.equals("distilled") ? Component.translatable(PREFIX + "distilled_water") :
                     Component.translatable(PREFIX + "water_grade", name);
